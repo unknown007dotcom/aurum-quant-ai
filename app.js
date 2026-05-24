@@ -611,18 +611,10 @@ const LiquidityEngine = {
         const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
         const currentDayOfYear = Math.floor((istNow - new Date(istNow.getFullYear(), 0, 0)) / 86400000);
         if (this._levelStatuses._lastResetDay !== currentDayOfYear && istNow.getHours() >= 5) {
-            // Reset daily/session statuses, keep monthly/weekly
-            const keepKeys = new Set();
-            for (const key in this._levelStatuses) {
-                if (key.startsWith("PMH") || key.startsWith("PML") || key.startsWith("PQH") || key.startsWith("PQL") ||
-                    key.startsWith("PWH") || key.startsWith("PWL")) {
-                    const status = this._levelStatuses[key];
-                    if (status === "SWEPT" || status === "BROKEN") keepKeys.add(key);
-                }
-            }
-            const preserved = {};
-            keepKeys.forEach(k => { preserved[k] = this._levelStatuses[k]; });
-            this._levelStatuses = { ...preserved, _lastResetDay: currentDayOfYear };
+            // Reset ALL statuses on new day. With price-inclusive keys,
+            // unchanged levels will be re-detected from candle data automatically.
+            // Changed levels get fresh keys, so old stale statuses are ignored.
+            this._levelStatuses = { _lastResetDay: currentDayOfYear };
         }
 
         for (const pool of allPools) {
@@ -632,7 +624,7 @@ const LiquidityEngine = {
             if (pool.sessionStatus === "tracking") continue;
 
             // Skip dead levels (already SWEPT or BROKEN)
-            const levelKey = pool.shortName;
+            const levelKey = `${pool.shortName}_${pool.price.toFixed(2)}`;
             const currentStatus = this._levelStatuses[levelKey];
             if (currentStatus === "SWEPT" || currentStatus === "BROKEN") {
                 // Still push a "dead" marker so UI shows the status
@@ -659,8 +651,19 @@ const LiquidityEngine = {
             const childCandles = this._getChildCandles(mtfData, pool.childTf);
             if (!childCandles || !childCandles.length) continue;
 
-            // Scan backwards up to 50 child candles to find the most recent event for this pool.
-            const maxLookback = Math.min(50, childCandles.length);
+            // Limit lookback to current period only to avoid stale historical sweeps
+            let maxLookback;
+            if (pool.parent === "Monthly" || pool.parent === "Quarterly") {
+                maxLookback = Math.min(8, childCandles.length);   // ~2 months of weekly candles
+            } else if (pool.parent === "Weekly") {
+                maxLookback = Math.min(7, childCandles.length);    // 1 week of daily candles
+            } else if (pool.parent === "Daily") {
+                maxLookback = Math.min(12, childCandles.length);   // 2 days of 4H candles
+            } else if (pool.parent === "Session") {
+                maxLookback = Math.min(24, childCandles.length);   // Current session of 1H candles
+            } else {
+                maxLookback = Math.min(20, childCandles.length);   // Inducement / default
+            }
             for (let i = 1; i <= maxLookback; i++) {
                 const child = childCandles.at(-i);
                 const prior = (childCandles.length >= i + 1) ? childCandles.at(-(i + 1)) : null;
