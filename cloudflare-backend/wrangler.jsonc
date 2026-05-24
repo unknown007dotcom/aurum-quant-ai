@@ -1,0 +1,16 @@
+﻿{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "aurum-quant-edge",
+  "main": "src/index.js",
+  "compatibility_date": "2026-05-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "kv_namespaces": [
+    {
+      "binding": "AURUM_KV",
+      "id": "2257bf3ff2a4471ba6ad5eb8feff843c"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}

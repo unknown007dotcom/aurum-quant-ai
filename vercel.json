@@ -1,0 +1,17 @@
+{
+  "crons": [
+    {
+      "path": "/api/auto-analyze",
+      "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/auto-learn",
+      "schedule": "35 0 * * *"
+    }
+  ],
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 300
+    }
+  }
+}
