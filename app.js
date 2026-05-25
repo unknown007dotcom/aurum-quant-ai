@@ -461,6 +461,44 @@ const AnalysisEngine = {
             `▶ Signal: ${recommendation}`
         ].join("\n");
 
+        let liquidityPools = { extreme: [], midExtreme: [], decisional: [], inducement: [] };
+        let liquidityEvents = [];
+        let sessionLevels = {};
+        try {
+            liquidityPools = LiquidityEngine.computeLiquidityPools(mtfData);
+            liquidityEvents = LiquidityEngine.scanAllLiquidityEvents(liquidityPools, mtfData);
+            sessionLevels = LiquidityEngine._sessionState || {};
+        } catch (e) { console.warn("Failed to compute liquidity for confidence scaling", e); }
+
+        let confidence = 40;
+        if (trend === 'bullish' || trend === 'bearish') confidence += 10;
+        if (state.rmiBias === trend) confidence += 10;
+        if (htfAlignment.filter(row => row.includes(trend)).length > 1) confidence += 15;
+        if (fvgs.length > 0) confidence += 10;
+        if (structureEvents.length > 0) confidence += 5;
+
+        const sweepEvents = (liquidityEvents || []).filter(e => e.type === 'SWEEP');
+        const alignedSweep = sweepEvents.some(e => {
+            if (trend === 'bullish' && e.pool?.side === 'low' && e.biasDirection === 'reversal') return true;
+            if (trend === 'bearish' && e.pool?.side === 'high' && e.biasDirection === 'reversal') return true;
+            return false;
+        });
+        if (alignedSweep) confidence += 15;
+        confidence = Math.min(95, Math.max(30, confidence));
+
+        const atrMult = currentAtr;
+        let calcTp1 = currentPrice + (trend === 'bullish' ? 1.5 * atrMult : -1.5 * atrMult);
+        let calcTp2 = currentPrice + (trend === 'bullish' ? 3.0 * atrMult : -3.0 * atrMult);
+        let calcStop = currentPrice + (trend === 'bullish' ? -1.0 * atrMult : 1.0 * atrMult);
+
+        if (liquidityEvents && liquidityEvents.length > 0) {
+            const sweepEvent = liquidityEvents.find(e => e.type === 'SWEEP' && e.nextTP && e.nextTP !== '—');
+            if (sweepEvent) {
+                const tpMatch = sweepEvent.nextTP.match(/\$?([\d.]+)/);
+                if (tpMatch) calcTp1 = parseFloat(tpMatch[1]);
+            }
+        }
+
         return {
             price: currentPrice,
             trend,
@@ -478,11 +516,11 @@ const AnalysisEngine = {
             equationsText,
             decision: {
                 action: trend === "bullish" ? "Buy" : "Sell",
-                confidence: 75,
+                confidence,
                 score: trend === "bullish" ? 3 : -3,
-                tp1: currentPrice + (trend === "bullish" ? 3 : -3),
-                tp2: currentPrice + (trend === "bullish" ? 7 : -7),
-                stopPrice: currentPrice - (trend === "bullish" ? 4 : -4),
+                tp1: calcTp1,
+                tp2: calcTp2,
+                stopPrice: calcStop,
                 tradePlan: [
                     `Institutional Regime: ${trend.toUpperCase()}`,
                     `RMI Momentum: ${state.rmiBias.toUpperCase()}`,
@@ -501,13 +539,15 @@ const LiquidityEngine = {
     ASIAN_END_UTC: 7,     // 12:30 IST = 07:00 UTC
     LONDON_START_UTC: 7,  // 12:30 IST = 07:00 UTC
     LONDON_END_UTC: 12,   // 17:30 IST = 12:00 UTC
+    NY_START_UTC: 12,
+    NY_END_UTC: 17.5,
 
     // Minimum wick/close depth to qualify as a real event (filters micro-noise / spread)
     MIN_DEPTH: 0.10, // $0.10 for Gold (XAUUSD)
 
     // Track notified events to prevent duplicates
     _notifiedEvents: new Set(),
-    _sessionState: { asianHigh: null, asianLow: null, londonHigh: null, londonLow: null, asianLocked: false, londonLocked: false, lastResetDay: -1 },
+    _sessionState: { asianHigh: null, asianLow: null, londonHigh: null, londonLow: null, nyHigh: null, nyLow: null, asianLocked: false, londonLocked: false, nyLocked: false, lastResetDay: -1 },
 
     // Level status tracking: ACTIVE / TAPPED / PENDING / SWEPT / BROKEN
     _levelStatuses: {},
@@ -582,6 +622,12 @@ const LiquidityEngine = {
             pools.decisional.push(
                 { name: "London Session High", shortName: "LSH", price: sessionLevels.londonHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.londonLocked ? "locked" : "tracking" },
                 { name: "London Session Low", shortName: "LSL", price: sessionLevels.londonLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.londonLocked ? "locked" : "tracking" }
+            );
+        }
+        if (sessionLevels.nyHigh !== null) {
+            pools.decisional.push(
+                { name: "New York Session High", shortName: "NYH", price: sessionLevels.nyHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.nyLocked ? "locked" : "tracking" },
+                { name: "New York Session Low", shortName: "NYL", price: sessionLevels.nyLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.nyLocked ? "locked" : "tracking" }
             );
         }
 
@@ -957,7 +1003,7 @@ const LiquidityEngine = {
 
         // Daily reset at 05:30 IST
         if (this._sessionState.lastResetDay !== currentDayOfYear) {
-            this._sessionState = { asianHigh: null, asianLow: null, londonHigh: null, londonLow: null, asianLocked: false, londonLocked: false, lastResetDay: currentDayOfYear };
+            this._sessionState = { asianHigh: null, asianLow: null, londonHigh: null, londonLow: null, nyHigh: null, nyLow: null, asianLocked: false, londonLocked: false, nyLocked: false, lastResetDay: currentDayOfYear };
         }
 
         // Filter H1 candles for today's sessions
@@ -1007,6 +1053,27 @@ const LiquidityEngine = {
         // Lock London at 17:30 IST (12:00 UTC)
         if (istHour > 17 || (istHour === 17 && istMinute >= 30)) {
             this._sessionState.londonLocked = true;
+        }
+
+        // New York: 17:30-23:00 IST (12:00-17:30 UTC)
+        const nyCandles = todayCandles.filter(c => {
+            const cTime = new Date(c.datetime);
+            const utcHour = cTime.getUTCHours();
+            const utcMin = cTime.getUTCMinutes();
+            const timeVal = utcHour + (utcMin / 60);
+            return timeVal >= 12 && timeVal < 17.5;
+        });
+
+        if (nyCandles.length > 0) {
+            const nHigh = Math.max(...nyCandles.map(c => c.high));
+            const nLow = Math.min(...nyCandles.map(c => c.low));
+            this._sessionState.nyHigh = nHigh;
+            this._sessionState.nyLow = nLow;
+        }
+
+        // Lock NY at 23:00 IST (17:30 UTC)
+        if (istHour > 23 || (istHour === 23 && istMinute >= 0)) {
+            this._sessionState.nyLocked = true;
         }
 
         return this._sessionState;
@@ -1628,8 +1695,21 @@ function renderSessionLevels(sessionLevels) {
             <span class="session-status">${sessionLevels.londonLocked ? "LOCKED" : "TRACKING"}</span>
         </div>`;
     }
+    if (sessionLevels.nyHigh !== null) {
+        const nyClass = sessionLevels.nyLocked ? "locked" : "tracking";
+        html += `<div class="session-level ny ${nyClass}">
+            <span class="session-label">🗽 New York High</span>
+            <span class="session-price">$${sessionLevels.nyHigh.toFixed(2)}</span>
+            <span class="session-status">${sessionLevels.nyLocked ? "LOCKED" : "TRACKING"}</span>
+        </div>`;
+        html += `<div class="session-level ny ${nyClass}">
+            <span class="session-label">🗽 New York Low</span>
+            <span class="session-price">$${sessionLevels.nyLow.toFixed(2)}</span>
+            <span class="session-status">${sessionLevels.nyLocked ? "LOCKED" : "TRACKING"}</span>
+        </div>`;
+    }
     if (!html) {
-        html = `<p style="color:var(--muted);font-size:0.85rem;">Session levels will populate during Asian (05:30-12:30 IST) and London (12:30-17:30 IST) hours.</p>`;
+        html = `<p style="color:var(--muted);font-size:0.85rem;">Session levels will populate during Asian (05:30-12:30 IST), London (12:30-17:30 IST) and NY (17:30-23:00 IST) hours.</p>`;
     }
     container.innerHTML = html;
 }
@@ -2135,7 +2215,13 @@ function buildAiPrompt(analysis, mtfData) {
         `Rule Engine TP2: ${Number.isFinite(tp2) ? tp2.toFixed(2) : "n/a"}`,
         `Trend: ${analysis?.trend || "n/a"}`,
         `RMI: ${analysis?.rmi?.value ?? "n/a"} (${analysis?.rmi?.bias || "n/a"})`,
+        `HTF Alignment: ${Array.isArray(analysis?.htfAlignment) ? analysis.htfAlignment.join(" | ") : "n/a"}`,
+        `Structure Events: ${Array.isArray(analysis?.structureEvents) ? analysis.structureEvents.join(", ") : "none"}`,
         `Fair Value Gaps: ${Array.isArray(analysis?.fvgs) ? analysis.fvgs.map(f => `${f.side}@${f.price.toFixed(2)}`).join(", ") : "none"}`,
+        `Order Blocks: ${Array.isArray(analysis?.orderBlocks) ? analysis.orderBlocks.map(ob => `${ob.side}@${ob.price.toFixed(2)}`).join(", ") : "none"}`,
+        `Liquidity Pools: ${analysis?.liquidityPools ? JSON.stringify(analysis.liquidityPools) : "none"}`,
+        `Liquidity Events: ${Array.isArray(analysis?.liquidityEvents) ? analysis.liquidityEvents.map(e => `${e.type} on ${e.pool?.shortName} @ ${e.price}`).join(", ") : "none"}`,
+        `Session Levels: ${analysis?.sessionLevels ? JSON.stringify(analysis.sessionLevels) : "none"}`,
         `Benchmark Close: ${benchmark?.close || "n/a"}`,
         `Alpha Vantage Reference: ${alphaVantage ? `Bid: ${alphaVantage["8. Bid Price"]}, Ask: ${alphaVantage["9. Ask Price"]}` : "n/a"}`,
         `Latest Entry Candle: ${latestEntry ? JSON.stringify(latestEntry) : "n/a"}`,
