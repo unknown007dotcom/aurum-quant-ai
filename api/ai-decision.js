@@ -688,7 +688,7 @@ function buildSummarySystemPrompt() {
     "The JSON MUST match this exact structure:",
     "{",
     "  \"researcher\": {",
-    "    \"summary\": \"Explain the institutional narrative. If Red-Team identifies a trap, prioritize it.\",",
+    "    \"summary\": \"Explain the institutional narrative. You MUST explicitly reference HTF Alignment, FVGs, active Liquidity Pools, Session Levels, and Liquidity Sweeps in your overview. If Red-Team identifies a trap, prioritize it.\",",
     "    \"direction\": \"Buy\", \"Sell\", or \"Stay Flat\",",
     "    \"riskNote\": \"Summarize the RED-TEAM CRITIC's strongest argument.\"",
     "  },",
