@@ -1,4 +1,4 @@
-﻿const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_INSTRUMENT = "XAU_USD";
 const HISTORY_LIMIT = 150;
 const MIN_DEPTH = 0.10;
@@ -159,6 +159,54 @@ async function handleSettings(request, env) {
   return { ok: true };
 }
 
+function resolveBestModelReplacement(modelId, availableModels) {
+  const list = Array.isArray(availableModels) ? availableModels : [];
+  if (list.length === 0) return modelId;
+
+  const id = String(modelId || "").toLowerCase().trim();
+  const exactMatch = list.find((m) => String(m.id || "").toLowerCase().trim() === id);
+  if (exactMatch) return exactMatch.id;
+
+  const isLlama = id.includes("llama");
+  const isGemma = id.includes("gemma");
+  const isMistral = id.includes("mistral");
+  const is70B = id.includes("70b");
+  const is8B = id.includes("8b");
+
+  let match = list.find((m) => {
+    const mId = String(m.id || "").toLowerCase();
+    if (isLlama && !mId.includes("llama")) return false;
+    if (isGemma && !mId.includes("gemma")) return false;
+    if (isMistral && !mId.includes("mistral")) return false;
+    if (is70B && !mId.includes("70b")) return false;
+    if (is8B && !mId.includes("8b")) return false;
+    return true;
+  });
+  if (match) return match.id;
+
+  match = list.find((m) => {
+    const mId = String(m.id || "").toLowerCase();
+    if (isLlama && mId.includes("llama")) return true;
+    if (isGemma && mId.includes("gemma")) return true;
+    if (isMistral && mId.includes("mistral")) return true;
+    return false;
+  });
+  if (match) return match.id;
+
+  const preferred = [
+    "meta/llama-3.1-8b-instruct",
+    "meta/llama-3.1-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "openai/gpt-oss-20b",
+    "mistralai/mistral-7b-instruct-v0.3",
+  ];
+  const smoke = preferred.map((prefId) => list.find((m) => m.id === prefId)).find(Boolean) ||
+    list.find((m) => /(?:instruct|chat|gpt-oss)/i.test(m.id));
+  if (smoke) return smoke.id;
+
+  return list[0].id;
+}
+
 async function handleAiDecision(request, env) {
   const body = await request.json().catch(() => ({}));
   const prompt = String(body.prompt || "").trim();
@@ -218,7 +266,7 @@ async function handleAiDecision(request, env) {
 
   const selectedModelId = access.modelIds.has(modelId)
     ? modelId
-    : access.models[0]?.id || "";
+    : resolveBestModelReplacement(modelId, access.models);
 
   if (!selectedModelId) {
     return {

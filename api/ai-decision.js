@@ -577,15 +577,77 @@ async function validateNvidiaChatAccess({ apiKey, baseUrl, modelId }) {
   }
 }
 
+function resolveBestModelReplacement(modelId, availableModels) {
+  const list = Array.isArray(availableModels) ? availableModels : [];
+  if (list.length === 0) return modelId;
+
+  const id = String(modelId || "").toLowerCase().trim();
+  
+  // 1. Exact match (case-insensitive)
+  const exactMatch = list.find((m) => String(m.id || "").toLowerCase().trim() === id);
+  if (exactMatch) return exactMatch.id;
+
+  // 2. Extract key features of model ID to find similar family/size
+  const isLlama = id.includes("llama");
+  const isGemma = id.includes("gemma");
+  const isMistral = id.includes("mistral");
+  const is70B = id.includes("70b");
+  const is8B = id.includes("8b");
+
+  // First try: Same family AND same size
+  let match = list.find((m) => {
+    const mId = String(m.id || "").toLowerCase();
+    if (isLlama && !mId.includes("llama")) return false;
+    if (isGemma && !mId.includes("gemma")) return false;
+    if (isMistral && !mId.includes("mistral")) return false;
+    if (is70B && !mId.includes("70b")) return false;
+    if (is8B && !mId.includes("8b")) return false;
+    return true;
+  });
+  if (match) return match.id;
+
+  // Second try: Same family
+  match = list.find((m) => {
+    const mId = String(m.id || "").toLowerCase();
+    if (isLlama && mId.includes("llama")) return true;
+    if (isGemma && mId.includes("gemma")) return true;
+    if (isMistral && mId.includes("mistral")) return true;
+    return false;
+  });
+  if (match) return match.id;
+
+  // Third try: Pick preferred smoke test validation model if present
+  const preferred = [
+    "meta/llama-3.1-8b-instruct",
+    "meta/llama-3.1-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "openai/gpt-oss-20b",
+    "mistralai/mistral-7b-instruct-v0.3",
+  ];
+  const smoke = preferred.map((prefId) => list.find((m) => m.id === prefId)).find(Boolean) ||
+    list.find((m) => /(?:instruct|chat|gpt-oss)/i.test(m.id));
+  if (smoke) return smoke.id;
+
+  // Fourth try: Fall back to first available model in list
+  return list[0].id;
+}
+
 function applyWorkingNvidiaAccess(models, access, options = {}) {
   if (!Array.isArray(models) || !access?.ok) return Array.isArray(models) ? models : [];
   const usable = models
-    .filter((model) => model?.id && (!access.catalogAvailable || access.modelIds.has(model.id)))
-    .map((model) => ({
-      ...model,
-      apiKey: access.apiKey,
-      baseUrl: access.baseUrl || model.baseUrl || DEFAULT_BASE_URL,
-    }));
+    .filter((model) => model?.id)
+    .map((model) => {
+      let finalId = model.id;
+      if (access.catalogAvailable && !access.modelIds.has(model.id)) {
+        finalId = resolveBestModelReplacement(model.id, access.models);
+      }
+      return {
+        ...model,
+        id: finalId,
+        apiKey: access.apiKey,
+        baseUrl: access.baseUrl || model.baseUrl || DEFAULT_BASE_URL,
+      };
+    });
 
   if (usable.length > 0 || !options.fillFromCatalog || !Array.isArray(access.models) || access.models.length === 0) {
     return usable;

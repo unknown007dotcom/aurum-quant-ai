@@ -555,6 +555,20 @@ const LiquidityEngine = {
     // Diagnostic logs (last 100 entries)
     _diagnosticLogs: [],
 
+    // Safely parse datetime strings as UTC, avoiding browser/local timezone traps
+    parseUtcDate(dateStr) {
+        if (!dateStr) return new Date();
+        if (typeof dateStr !== "string") return new Date(dateStr);
+        if (dateStr.includes("Z") || dateStr.includes("+") || (dateStr.includes("-") && dateStr.includes("T"))) {
+            return new Date(dateStr);
+        }
+        const normalized = dateStr.trim().replace(/\s+/, "T");
+        if (!normalized.includes("T")) {
+            return new Date(normalized + "T00:00:00Z");
+        }
+        return new Date(normalized.includes("Z") ? normalized : normalized + "Z");
+    },
+
     /**
      * Compute all liquidity pools from multi-timeframe OANDA data.
      * Returns structured pools grouped by tier.
@@ -657,9 +671,6 @@ const LiquidityEngine = {
         const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
         const currentDayOfYear = Math.floor((istNow - new Date(istNow.getFullYear(), 0, 0)) / 86400000);
         if (this._levelStatuses._lastResetDay !== currentDayOfYear && istNow.getHours() >= 5) {
-            // Reset ALL statuses on new day. With price-inclusive keys,
-            // unchanged levels will be re-detected from candle data automatically.
-            // Changed levels get fresh keys, so old stale statuses are ignored.
             this._levelStatuses = { _lastResetDay: currentDayOfYear };
         }
 
@@ -710,6 +721,10 @@ const LiquidityEngine = {
             } else {
                 maxLookback = Math.min(20, childCandles.length);   // Inducement / default
             }
+
+            let foundConfirmed = false;
+            let sawPendingOnLatest = false;
+
             for (let i = 1; i <= maxLookback; i++) {
                 const child = childCandles.at(-i);
                 const prior = (childCandles.length >= i + 1) ? childCandles.at(-(i + 1)) : null;
@@ -727,25 +742,40 @@ const LiquidityEngine = {
                     event.tierLabel = this._tierLabel(pool.tier);
                     
                     // Format time of the specific child candle that triggered the event
-                    const eventDate = new Date(child.datetime);
+                    const eventDate = this.parseUtcDate(child.datetime);
                     event.time = eventDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
                     
                     event.nextTP = this._findNextTP(allPools, pool, event.type, child.close);
+
+                    if (i > 1) {
+                        event._dead = true;
+                        event.type = event.type === "SWEEP" ? "SWEPT" : "BROKEN";
+                        event.strength = "Historical";
+                    } else {
+                        event._dead = false;
+                    }
+
                     events.push(event);
 
                     // Update level status
-                    this._levelStatuses[levelKey] = event.type === "SWEEP" ? "SWEPT" : "BROKEN";
+                    this._levelStatuses[levelKey] = event.type === "SWEEP" || event.type === "SWEPT" ? "SWEPT" : "BROKEN";
+                    foundConfirmed = true;
                     break;
                 }
-                // PENDING: don't push to events, don't update status, keep scanning
-                if (event && event.type === "PENDING") {
-                    this._levelStatuses[levelKey] = "PENDING";
-                    break;
+                
+                // Pending is weak evidence. Keep scanning; do not let it hide a true older confirmation.
+                if (event && event.type === "PENDING" && i === 1) {
+                    sawPendingOnLatest = true;
                 }
                 // TAP on live candle: skip silently
                 if (event && event.type === "TAP") {
                     continue;
                 }
+            }
+
+            // PENDING is allowed only for the most recent candle and never overwrites confirmed states.
+            if (!foundConfirmed && sawPendingOnLatest && currentStatus !== "SWEPT" && currentStatus !== "BROKEN") {
+                this._levelStatuses[levelKey] = "PENDING";
             }
         }
 
@@ -817,7 +847,7 @@ const LiquidityEngine = {
         }
 
         // Dynamic ATR calculation for MIN_DEPTH
-        let dynamicMinDepth = this.MIN_DEPTH;
+        let atr = this.MIN_DEPTH;
         if (childCandles && childCandles.length > 14) {
             let trs = [childCandles[0].high - childCandles[0].low];
             for (let i = 1; i < childCandles.length; i++) {
@@ -827,31 +857,38 @@ const LiquidityEngine = {
                     Math.abs(childCandles[i].low - childCandles[i - 1].close)
                 ));
             }
-            let atr = trs[0];
+            atr = trs[0];
             for (let i = 1; i < trs.length; i++) {
                 atr = (atr * 13 + trs[i]) / 14;
             }
-            dynamicMinDepth = Math.max(this.MIN_DEPTH, atr * 0.10);
         }
 
-        if (pool.side === "high") {
-            const wickDepth = high - level;
+        const minSweepDepth = Math.max(0.15, atr * 0.08);
+        const minBreakDepth = Math.max(0.25, atr * 0.10);
+        const hasTimeframePreference = pool.childTf === "1h" || pool.childTf === "4h";
 
-            // RULE A — SWEEP: wicked above level, closed back below
-            if (high > level && close < level && wickDepth > dynamicMinDepth) {
+        if (pool.side === "high") {
+            const wickAbove = high - level;
+            const closeAbove = close - level;
+
+            // RULE A — SWEEP: wicked above level, closed back inside
+            if (high > level && close <= level && wickAbove >= (minSweepDepth * 0.5)) {
+                let strength = wickAbove >= atr * 0.25 ? "Very Strong" : "Strong";
+                if (hasTimeframePreference) strength += " (Preferred TF)";
                 return {
                     type: "SWEEP",
                     displayName: `${pool.name} Sweep`,
                     emoji: "🩸",
                     price: level,
                     childClose: close,
-                    childDetail: `Wick $${wickDepth.toFixed(2)} above, Closed $${(level - close).toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}%`,
+                    childDetail: `Wick $${wickAbove.toFixed(2)} above, Closed $${(level - close).toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}%`,
                     bias: "REVERSAL EXPECTED ↓",
-                    biasDirection: "reversal"
+                    biasDirection: "reversal",
+                    strength
                 };
             }
             // MULTI-CANDLE SWEEP: previous candle closed above, current candle engulfs and closes below
-            else if (priorCandle && priorCandle.close > level && close < level && high > level) {
+            else if (priorCandle && priorCandle.close > level && close <= level && high > level) {
                 return {
                     type: "SWEEP",
                     displayName: `${pool.name} Multi-Candle Sweep`,
@@ -860,69 +897,84 @@ const LiquidityEngine = {
                     childClose: close,
                     childDetail: `Engulfed back below $${level.toFixed(2)} | Body ${(bodyRatio * 100).toFixed(0)}%`,
                     bias: "REVERSAL EXPECTED ↓",
-                    biasDirection: "reversal"
+                    biasDirection: "reversal",
+                    strength: "Strong"
                 };
             }
 
             // Close is ABOVE the level
             if (close > level) {
-                const closeDepth = close - level;
-
-                // RULE B — BREAKOUT: strong body + FVG + depth
-                if (closeDepth > dynamicMinDepth && bodyRatio >= 0.70) {
+                // RULE B — BREAKOUT: strong close with momentum
+                if (closeAbove >= (minBreakDepth * 0.5) && bodyRatio >= 0.40) {
                     const hasFVG = this._checkFVGFormed(childCandles, childCandle);
-                    if (hasFVG.formed) {
-                        return {
-                            type: "BREAKOUT",
-                            displayName: `${pool.name} Breakout`,
-                            emoji: "💥",
-                            price: level,
-                            childClose: close,
-                            childDetail: `Close $${closeDepth.toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}% | FVG ✓`,
-                            fvgZone: hasFVG.zone,
-                            bias: "CONTINUATION UP ↑",
-                            biasDirection: "continuation"
-                        };
-                    }
+                    return {
+                        type: "BREAKOUT",
+                        displayName: `${pool.name} Breakout`,
+                        emoji: "💥",
+                        price: level,
+                        childClose: close,
+                        childDetail: `Closed $${closeAbove.toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}%${hasFVG.formed ? ' | FVG confirmed' : ''}`,
+                        fvgZone: hasFVG.zone,
+                        bias: "CONTINUATION UP ↑",
+                        biasDirection: "continuation",
+                        strength: hasTimeframePreference ? "Strong (Preferred TF)" : "Strong"
+                    };
                 }
 
-                // RULE C — PENDING: close beyond but weak body or no FVG
-                if (closeDepth > dynamicMinDepth) {
+                // RULE C — PENDING: close beyond but weak momentum
+                if (closeAbove > 0) {
                     return {
                         type: "PENDING",
-                        displayName: `${pool.name} Weak Close`,
+                        displayName: `${pool.name} Touch Pending`,
                         emoji: "⚠️",
                         price: level,
                         childClose: close,
-                        childDetail: `Close $${closeDepth.toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}% | ${bodyRatio < 0.70 ? "Weak body" : "No FVG"}`,
+                        childDetail: `Closed $${closeAbove.toFixed(2)} above, but sweep/breakout momentum is weak`,
                         bias: "PENDING — Wait for confirmation",
-                        biasDirection: "pending"
+                        biasDirection: "pending",
+                        strength: "Weak"
                     };
                 }
             }
 
-            // Wick touched but below minimum depth threshold
-            if (high > level) return { type: "TAP" };
+            // Wick touched but below minimum sweep depth
+            if (high >= level) {
+                return {
+                    type: "TAP",
+                    displayName: `${pool.name} Tap`,
+                    emoji: "⚠️",
+                    price: level,
+                    childClose: close,
+                    childDetail: "Touched level; waiting for confirmation",
+                    bias: "WAIT FOR CONFIRMATION",
+                    biasDirection: "neutral",
+                    strength: "Weak"
+                };
+            }
 
         } else {
             // LOW-side pool: price approaches from above
-            const wickDepth = level - low;
+            const wickBelow = level - low;
+            const closeBelow = level - close;
 
-            // RULE A — SWEEP: wicked below level, closed back above
-            if (low < level && close > level && wickDepth > dynamicMinDepth) {
+            // RULE A — SWEEP: wicked below level, closed back inside
+            if (low < level && close >= level && wickBelow >= (minSweepDepth * 0.5)) {
+                let strength = wickBelow >= atr * 0.25 ? "Very Strong" : "Strong";
+                if (hasTimeframePreference) strength += " (Preferred TF)";
                 return {
                     type: "SWEEP",
                     displayName: `${pool.name} Sweep`,
                     emoji: "🩸",
                     price: level,
                     childClose: close,
-                    childDetail: `Wick $${wickDepth.toFixed(2)} below, Closed $${(close - level).toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}%`,
+                    childDetail: `Wick $${wickBelow.toFixed(2)} below, Closed $${(close - level).toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}%`,
                     bias: "REVERSAL EXPECTED ↑",
-                    biasDirection: "reversal"
+                    biasDirection: "reversal",
+                    strength
                 };
             }
             // MULTI-CANDLE SWEEP: previous candle closed below, current candle engulfs and closes above
-            else if (priorCandle && priorCandle.close < level && close > level && low < level) {
+            else if (priorCandle && priorCandle.close < level && close >= level && low < level) {
                 return {
                     type: "SWEEP",
                     displayName: `${pool.name} Multi-Candle Sweep`,
@@ -931,49 +983,60 @@ const LiquidityEngine = {
                     childClose: close,
                     childDetail: `Engulfed back above $${level.toFixed(2)} | Body ${(bodyRatio * 100).toFixed(0)}%`,
                     bias: "REVERSAL EXPECTED ↑",
-                    biasDirection: "reversal"
+                    biasDirection: "reversal",
+                    strength: "Strong"
                 };
             }
 
             // Close is BELOW the level
             if (close < level) {
-                const closeDepth = level - close;
-
-                // RULE B — BREAKOUT: strong body + FVG + depth
-                if (closeDepth > dynamicMinDepth && bodyRatio >= 0.70) {
+                // RULE B — BREAKOUT: strong close with momentum
+                if (closeBelow >= (minBreakDepth * 0.5) && bodyRatio >= 0.40) {
                     const hasFVG = this._checkFVGFormed(childCandles, childCandle);
-                    if (hasFVG.formed) {
-                        return {
-                            type: "BREAKOUT",
-                            displayName: `${pool.name} Breakout`,
-                            emoji: "💥",
-                            price: level,
-                            childClose: close,
-                            childDetail: `Close $${closeDepth.toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}% | FVG ✓`,
-                            fvgZone: hasFVG.zone,
-                            bias: "CONTINUATION DOWN ↓",
-                            biasDirection: "continuation"
-                        };
-                    }
+                    return {
+                        type: "BREAKOUT",
+                        displayName: `${pool.name} Breakout`,
+                        emoji: "💥",
+                        price: level,
+                        childClose: close,
+                        childDetail: `Closed $${closeBelow.toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}%${hasFVG.formed ? ' | FVG confirmed' : ''}`,
+                        fvgZone: hasFVG.zone,
+                        bias: "CONTINUATION DOWN ↓",
+                        biasDirection: "continuation",
+                        strength: hasTimeframePreference ? "Strong (Preferred TF)" : "Strong"
+                    };
                 }
 
-                // RULE C — PENDING: close beyond but weak body or no FVG
-                if (closeDepth > dynamicMinDepth) {
+                // RULE C — PENDING: close beyond but weak momentum
+                if (closeBelow > 0) {
                     return {
                         type: "PENDING",
-                        displayName: `${pool.name} Weak Close`,
+                        displayName: `${pool.name} Touch Pending`,
                         emoji: "⚠️",
                         price: level,
                         childClose: close,
-                        childDetail: `Close $${closeDepth.toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}% | ${bodyRatio < 0.70 ? "Weak body" : "No FVG"}`,
+                        childDetail: `Closed $${closeBelow.toFixed(2)} below, but sweep/breakout momentum is weak`,
                         bias: "PENDING — Wait for confirmation",
-                        biasDirection: "pending"
+                        biasDirection: "pending",
+                        strength: "Weak"
                     };
                 }
             }
 
-            // Wick touched but below minimum depth threshold
-            if (low < level) return { type: "TAP" };
+            // Wick touched but below minimum sweep depth
+            if (low <= level) {
+                return {
+                    type: "TAP",
+                    displayName: `${pool.name} Tap`,
+                    emoji: "⚠️",
+                    price: level,
+                    childClose: close,
+                    childDetail: "Touched level; waiting for confirmation",
+                    bias: "WAIT FOR CONFIRMATION",
+                    biasDirection: "neutral",
+                    strength: "Weak"
+                };
+            }
         }
 
         return null;
@@ -984,95 +1047,69 @@ const LiquidityEngine = {
      */
     detectSessionHighsLows(h1Candles) {
         if (!h1Candles || !h1Candles.length) return this._sessionState;
-        
-        // Use the last available candle's time instead of the literal system clock
-        const lastCandle = h1Candles.at(-1);
-        const candleDate = new Date(lastCandle.datetime);
-        
-        const istNow = new Date(candleDate.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-        const istHour = istNow.getHours();
-        const istMinute = istNow.getMinutes();
-        // Forex trading day resets at 05:30 IST (00:00 UTC).
-        // If current time is before 05:30 IST, we are in the PREVIOUS calendar day's trading session.
-        const tradingDayDate = new Date(istNow);
-        if (istHour < 5 || (istHour === 5 && istMinute < 30)) {
-            tradingDayDate.setDate(tradingDayDate.getDate() - 1);
-        }
-        
-        const currentDayOfYear = Math.floor((tradingDayDate - new Date(tradingDayDate.getFullYear(), 0, 0)) / 86400000);
 
-        // Daily reset at 05:30 IST
+        // Use the last available candle's time — UTC based, timezone safe
+        const lastCandle = h1Candles.at(-1);
+        const lastDate = this.parseUtcDate(lastCandle.datetime);
+        const utcHour = lastDate.getUTCHours();
+        const utcMinute = lastDate.getUTCMinutes();
+
+        // Trading day resets at 00:00 UTC (05:30 IST)
+        const currentDayOfYear = Math.floor(lastDate.getTime() / 86400000);
+
         if (this._sessionState.lastResetDay !== currentDayOfYear) {
             this._sessionState = { asianHigh: null, asianLow: null, londonHigh: null, londonLow: null, nyHigh: null, nyLow: null, asianLocked: false, londonLocked: false, nyLocked: false, lastResetDay: currentDayOfYear };
         }
 
-        // Filter H1 candles for today's sessions
-        const todayStart = new Date(tradingDayDate);
-        todayStart.setHours(5, 30, 0, 0);
-        // Convert IST to UTC for comparison
-        const todayStartUTC = new Date(todayStart.getTime() - (5.5 * 60 * 60 * 1000));
+        // Filter H1 candles for today (since 00:00 UTC)
+        const todayStartUTC = new Date(lastDate);
+        todayStartUTC.setUTCHours(0, 0, 0, 0);
 
-        const todayCandles = h1Candles.filter(c => {
-            const cTime = new Date(c.datetime);
-            return cTime >= todayStartUTC;
-        });
+        this._sessionState.todayStartUTC = todayStartUTC.getTime();
 
-        // Asian: 05:30-12:30 IST (00:00-07:00 UTC)
+        const todayCandles = h1Candles.filter(c => this.parseUtcDate(c.datetime) >= todayStartUTC);
+
+        // Asian: 00:00-07:00 UTC (05:30-12:30 IST)
         const asianCandles = todayCandles.filter(c => {
-            const cTime = new Date(c.datetime);
-            const utcHour = cTime.getUTCHours();
-            return utcHour >= 0 && utcHour < 7;
+            const h = this.parseUtcDate(c.datetime).getUTCHours();
+            return h >= 0 && h < 7;
         });
-
         if (asianCandles.length > 0) {
-            const aHigh = Math.max(...asianCandles.map(c => c.high));
-            const aLow = Math.min(...asianCandles.map(c => c.low));
-            this._sessionState.asianHigh = aHigh;
-            this._sessionState.asianLow = aLow;
+            this._sessionState.asianHigh = Math.max(...asianCandles.map(c => c.high));
+            this._sessionState.asianLow = Math.min(...asianCandles.map(c => c.low));
         }
-
-        // Lock Asian at 12:30 IST (07:00 UTC)
-        if (istHour > 12 || (istHour === 12 && istMinute >= 30)) {
+        // Lock Asian after 07:00 UTC
+        if (utcHour >= 7) {
             this._sessionState.asianLocked = true;
         }
 
-        // London: 12:30-17:30 IST (07:00-12:00 UTC)
+        // London: 07:00-12:00 UTC (12:30-17:30 IST)
         const londonCandles = todayCandles.filter(c => {
-            const cTime = new Date(c.datetime);
-            const utcHour = cTime.getUTCHours();
-            return utcHour >= 7 && utcHour < 12;
+            const h = this.parseUtcDate(c.datetime).getUTCHours();
+            return h >= 7 && h < 12;
         });
-
         if (londonCandles.length > 0) {
-            const lHigh = Math.max(...londonCandles.map(c => c.high));
-            const lLow = Math.min(...londonCandles.map(c => c.low));
-            this._sessionState.londonHigh = lHigh;
-            this._sessionState.londonLow = lLow;
+            this._sessionState.londonHigh = Math.max(...londonCandles.map(c => c.high));
+            this._sessionState.londonLow = Math.min(...londonCandles.map(c => c.low));
         }
-
-        // Lock London at 17:30 IST (12:00 UTC)
-        if (istHour > 17 || (istHour === 17 && istMinute >= 30)) {
+        // Lock London after 12:00 UTC
+        if (utcHour >= 12) {
             this._sessionState.londonLocked = true;
         }
 
-        // New York: 17:30-23:00 IST (12:00-17:30 UTC)
+        // NY: 12:00-17:30 UTC (17:30-23:00 IST)
         const nyCandles = todayCandles.filter(c => {
-            const cTime = new Date(c.datetime);
-            const utcHour = cTime.getUTCHours();
-            const utcMin = cTime.getUTCMinutes();
-            const timeVal = utcHour + (utcMin / 60);
+            const d = this.parseUtcDate(c.datetime);
+            const timeVal = d.getUTCHours() + d.getUTCMinutes() / 60;
             return timeVal >= 12 && timeVal < 17.5;
         });
-
         if (nyCandles.length > 0) {
-            const nHigh = Math.max(...nyCandles.map(c => c.high));
-            const nLow = Math.min(...nyCandles.map(c => c.low));
-            this._sessionState.nyHigh = nHigh;
-            this._sessionState.nyLow = nLow;
+            this._sessionState.nyHigh = Math.max(...nyCandles.map(c => c.high));
+            this._sessionState.nyLow = Math.min(...nyCandles.map(c => c.low));
         }
-
-        // Lock NY at 23:00 IST (17:30 UTC)
-        if (istHour > 23 || (istHour === 23 && istMinute >= 0)) {
+        // Lock NY after 17:30 UTC
+        const lastTimeVal = utcHour + utcMinute / 60;
+        if (lastTimeVal >= 17.5) {
             this._sessionState.nyLocked = true;
         }
 
@@ -1583,10 +1620,14 @@ function renderLiquidityPoolsUI(pools, events) {
         if (!pools || pools.length === 0) return "";
         const poolItems = pools.map(p => {
             const ev = eventMap[p.shortName];
+            const levelKey = `${p.shortName}_${p.price.toFixed(2)}`;
+            const currentStatus = LiquidityEngine._levelStatuses[levelKey];
+            
             let statusClass = "active";
             let statusText = "Active";
-            if (ev && ev.type === "SWEEP") { statusClass = "swept"; statusText = "Swept 🩸"; }
-            else if (ev && ev.type === "BREAKOUT") { statusClass = "broken"; statusText = "Broken 💥"; }
+            if (ev && (ev.type === "SWEEP" || ev.type === "SWEPT")) { statusClass = "swept"; statusText = "Swept 🩸"; }
+            else if (ev && (ev.type === "BREAKOUT" || ev.type === "BROKEN")) { statusClass = "broken"; statusText = "Broken 💥"; }
+            else if (currentStatus === "PENDING") { statusClass = "pending"; statusText = "Pending ⚠️"; }
             else if (p.sessionStatus === "tracking") { statusClass = "tracking"; statusText = "Tracking"; }
             else if (p.sessionStatus === "locked") { statusClass = "active"; statusText = "Locked"; }
             return `<div class="pool-item">
@@ -1623,8 +1664,8 @@ function renderLiquidityEventBox(events) {
     let filterVal = filterSelect ? filterSelect.value : "all";
     
     let filteredEvents = events;
-    if (filterVal === "sweep") filteredEvents = events.filter(e => e.type === "SWEEP");
-    else if (filterVal === "breakout") filteredEvents = events.filter(e => e.type === "BREAKOUT");
+    if (filterVal === "sweep") filteredEvents = events.filter(e => e.type === "SWEEP" || e.type === "SWEPT");
+    else if (filterVal === "breakout") filteredEvents = events.filter(e => e.type === "BREAKOUT" || e.type === "BROKEN");
     else if (filterVal === "extreme") filteredEvents = events.filter(e => e.pool?.tier === "extreme");
     else if (filterVal === "midExtreme") filteredEvents = events.filter(e => e.pool?.tier === "midExtreme");
     else if (filterVal === "decisional") filteredEvents = events.filter(e => e.pool?.tier === "decisional");
@@ -1640,7 +1681,7 @@ function renderLiquidityEventBox(events) {
     
     let html = "";
     sorted.slice(0, 3).forEach(ev => {
-        const isSweep = ev.type === "SWEEP";
+        const isSweep = ev.type === "SWEEP" || ev.type === "SWEPT";
         const boxClass = isSweep ? "sweep" : "breakout";
         html += `<div class="liquidity-event-box ${boxClass}" style="margin-bottom: 1rem;">
             <div class="event-header">
