@@ -697,15 +697,15 @@ const LiquidityEngine = {
                     emoji: currentStatus === "SWEPT" ? "🩸" : "💥",
                     price: pool.price,
                     childClose: 0,
-                    childDetail: `Previously confirmed`,
+                    childDetail: this._levelStatuses[levelKey + "_detail"] || "Previously confirmed",
                     bias: currentStatus === "SWEPT"
                         ? (pool.side === "high" ? "REVERSAL EXPECTED ↓" : "REVERSAL EXPECTED ↑")
                         : (pool.side === "high" ? "CONTINUATION UP ↑" : "CONTINUATION DOWN ↓"),
                     biasDirection: currentStatus === "SWEPT" ? "reversal" : "continuation",
                     pool,
                     tierLabel: this._tierLabel(pool.tier),
-                    time: "—",
-                    nextTP: "—",
+                    time: this._levelStatuses[levelKey + "_time"] || "—",
+                    nextTP: this._levelStatuses[levelKey + "_nextTP"] || "—",
                     _dead: true
                 });
                 continue;
@@ -767,6 +767,9 @@ const LiquidityEngine = {
 
                     // Update level status
                     this._levelStatuses[levelKey] = event.type === "SWEEP" || event.type === "SWEPT" ? "SWEPT" : "BROKEN";
+                    this._levelStatuses[levelKey + "_time"] = event.time;
+                    this._levelStatuses[levelKey + "_detail"] = event.childDetail;
+                    this._levelStatuses[levelKey + "_nextTP"] = event.nextTP;
                     foundConfirmed = true;
                     break;
                 }
@@ -1457,6 +1460,8 @@ async function runAnalysis() {
         const selectedModel = state.models.find(model => model.key === state.selectedModelKey) || state.models[0] || {};
 
         let aiRes, aiData;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
         try {
             aiRes = await fetch(apiUrl(APP_CONFIG.aiChatPath), {
                 method: "POST",
@@ -1471,10 +1476,13 @@ async function runAnalysis() {
                     debateModels: state.debateModels,
                     temperature: state.temperature,
                     prompt
-                })
+                }),
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
             aiData = await aiRes.json().catch(() => ({}));
         } catch (aiErr) {
+            clearTimeout(timeoutId);
             // AI network failed — render deterministic fallback so panel is never blank
             dom.setStatus(`Market analysis complete. AI offline: ${aiErr.message}`);
             const fallbackPayload = buildLocalAiFallback(analysis, `AI model unreachable: ${aiErr.message}`);
@@ -1635,6 +1643,8 @@ function renderLiquidityPoolsUI(pools, events) {
             let statusText = "Active";
             if (ev && (ev.type === "SWEEP" || ev.type === "SWEPT")) { statusClass = "swept"; statusText = "Swept 🩸"; }
             else if (ev && (ev.type === "BREAKOUT" || ev.type === "BROKEN")) { statusClass = "broken"; statusText = "Broken 💥"; }
+            else if (currentStatus === "SWEPT") { statusClass = "swept"; statusText = "Swept 🩸"; }
+            else if (currentStatus === "BROKEN") { statusClass = "broken"; statusText = "Broken 💥"; }
             else if (currentStatus === "PENDING") { statusClass = "pending"; statusText = "Pending ⚠️"; }
             else if (p.sessionStatus === "tracking") { statusClass = "tracking"; statusText = "Tracking"; }
             else if (p.sessionStatus === "locked") { statusClass = "active"; statusText = "Locked"; }
@@ -2585,7 +2595,7 @@ async function runLiquidityScanSilent() {
         state.lastAnalysisData.liquidityEvents = liquidityEvents;
         state.lastAnalysisData.sessionLevels = LiquidityEngine._sessionState;
         
-        renderLiquidityPoolsUI(liquidityPools, LiquidityEngine._sessionState);
+        renderLiquidityPoolsUI(liquidityPools, liquidityEvents);
         renderLiquidityEventBox(liquidityEvents);
         fireAllLiquidityNotifications(liquidityEvents);
     } catch (e) {
