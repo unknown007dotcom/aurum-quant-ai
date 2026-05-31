@@ -21,7 +21,7 @@ const APP_CONFIG = {
   defaultMarketDataKey: "",
   defaultBaseUrl: "https://integrate.api.nvidia.com/v1"
 };
-const SETTINGS_PASSWORD = "CHANGE_ME_PASSWORD";
+const SETTINGS_PASSWORD = "Aviraj@api7";
 const BASIC_SETTINGS_PASSWORD = "XAUUSD";
 
 // --- State Management ---
@@ -123,12 +123,18 @@ const AnalysisEngine = {
         return candles
             .map((candle) => ({
                 ...candle,
-                open: this.toNumber(candle?.open),
-                high: this.toNumber(candle?.high),
-                low: this.toNumber(candle?.low),
-                close: this.toNumber(candle?.close),
+                open: Number(candle?.open),
+                high: Number(candle?.high),
+                low: Number(candle?.low),
+                close: Number(candle?.close),
                 _ts: new Date(candle?.datetime || 0).getTime(),
             }))
+            .filter((candle) => 
+                Number.isFinite(candle.open) && candle.open > 0 &&
+                Number.isFinite(candle.high) && candle.high > 0 &&
+                Number.isFinite(candle.low) && candle.low > 0 &&
+                Number.isFinite(candle.close) && candle.close > 0
+            )
             .sort((a, b) => a._ts - b._ts); // oldest first
     },
 
@@ -743,7 +749,9 @@ const LiquidityEngine = {
                     
                     // Format time of the specific child candle that triggered the event
                     const eventDate = this.parseUtcDate(child.datetime);
-                    event.time = eventDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
+                    event.time = (eventDate instanceof Date && !isNaN(eventDate))
+                        ? eventDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false })
+                        : "N/A";
                     
                     event.nextTP = this._findNextTP(allPools, pool, event.type, child.close);
 
@@ -794,7 +802,7 @@ const LiquidityEngine = {
         const entry = {
             timestamp: istTime,
             level: `${pool.name} @ $${pool.price.toFixed(2)}`,
-            levelStatus: this._levelStatuses[pool.shortName] || "ACTIVE",
+            levelStatus: this._levelStatuses[`${pool.shortName}_${pool.price.toFixed(2)}`] || "ACTIVE",
             candle: {
                 open: candle.open?.toFixed(2),
                 high: candle.high?.toFixed(2),
@@ -1358,7 +1366,7 @@ function fireLiquidityNotification(event) {
     body += `Price   : $${event.price.toFixed(2)}\n`;
     body += `Tier    : ${event.tierLabel}\n`;
     body += `Parent  : ${event.pool.parent}\n`;
-    body += `Child TF: ${event.pool.childTf.toUpperCase()} (${event.childDetail}) ✅\n`;
+    body += `Child TF: ${String(event.pool?.childTf || "N/A").toUpperCase()} (${event.childDetail || "N/A"}) ✅\n`;
     if (event.fvgZone) body += `FVG Zone: ${event.fvgZone}\n`;
     body += `Time    : ${event.time} IST\n`;
     body += `Bias    : ${event.bias}\n`;
@@ -1693,7 +1701,7 @@ function renderLiquidityEventBox(events) {
                 <span class="event-key">Liquidity</span><span class="event-value">${escapeHtml(ev.displayName)}</span>
                 <span class="event-key">Price Level</span><span class="event-value">$${ev.price.toFixed(2)}</span>
                 <span class="event-key">Parent Candle</span><span class="event-value">${ev.pool.parent}</span>
-                <span class="event-key">Child Candle</span><span class="event-value">${ev.pool.childTf.toUpperCase()} (${ev.childDetail}) ✅</span>
+                <span class="event-key">Child Candle</span><span class="event-value">${String(ev.pool?.childTf || "N/A").toUpperCase()} (${ev.childDetail || "N/A"}) ✅</span>
                 ${ev.fvgZone ? `<span class="event-key">FVG Zone</span><span class="event-value">${ev.fvgZone}</span>` : ""}
                 <span class="event-key">Time (IST)</span><span class="event-value">${ev.time}</span>
                 <span class="event-key">Tier</span><span class="event-value">${ev.tierLabel}</span>
@@ -2259,7 +2267,15 @@ function buildAiPrompt(analysis, mtfData) {
         `HTF Alignment: ${Array.isArray(analysis?.htfAlignment) ? analysis.htfAlignment.join(" | ") : "n/a"}`,
         `Structure Events: ${Array.isArray(analysis?.structureEvents) ? analysis.structureEvents.join(", ") : "none"}`,
         `Fair Value Gaps: ${Array.isArray(analysis?.fvgs) ? analysis.fvgs.map(f => `${f.side}@${f.price.toFixed(2)}`).join(", ") : "none"}`,
-        `Order Blocks: ${Array.isArray(analysis?.orderBlocks) ? analysis.orderBlocks.map(ob => `${ob.side}@${ob.price.toFixed(2)}`).join(", ") : "none"}`,
+        `Order Blocks: ${Array.isArray(analysis?.orderBlocks) ? analysis.orderBlocks.map(ob => {
+            if (typeof ob === "string") return ob;
+            if (ob && typeof ob === "object") {
+                const side = ob.side || (ob.low && ob.high ? (ob.low < ob.high ? "bullish" : "bearish") : "unknown");
+                const price = typeof ob.price === "number" ? ob.price : (typeof ob.low === "number" ? ob.low : 0);
+                return `${side}@${price.toFixed(2)}`;
+            }
+            return "unknown";
+        }).join(", ") : "none"}`,
         `Liquidity Pools: ${analysis?.liquidityPools ? JSON.stringify(analysis.liquidityPools) : "none"}`,
         `Liquidity Events: ${Array.isArray(analysis?.liquidityEvents) ? analysis.liquidityEvents.map(e => `${e.type} on ${e.pool?.shortName} @ ${e.price}`).join(", ") : "none"}`,
         `Session Levels: ${analysis?.sessionLevels ? JSON.stringify(analysis.sessionLevels) : "none"}`,
@@ -2689,10 +2705,27 @@ window.addEventListener('DOMContentLoaded', () => {
         unlockBtn.onclick = () => {
             const passInput = dom.get("#passwordInput");
             const pass = passInput ? passInput.value : "";
-            if (pass === SETTINGS_PASSWORD) {
+            const errorEl = dom.get("#passwordError");
+            if (errorEl) errorEl.textContent = ""; // Clear existing errors
+            
+            if (pass === SETTINGS_PASSWORD || pass === BASIC_SETTINGS_PASSWORD) {
+                if (pass === BASIC_SETTINGS_PASSWORD) {
+                    state.settingsRole = "basic";
+                    document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
+                    document.querySelectorAll(".auth-only").forEach(el => el.style.display = "none");
+                } else {
+                    state.settingsRole = "admin";
+                    document.querySelectorAll(".admin-only").forEach(el => el.style.display = "");
+                    document.querySelectorAll(".auth-only").forEach(el => el.style.display = "");
+                }
                 dom.get("#passwordModal").classList.remove("open");
                 dom.get("#settingsPanel").classList.add("open");
                 loadAdminStats();
+            } else {
+                if (errorEl) {
+                    errorEl.textContent = "Invalid password. Please try again.";
+                    errorEl.style.color = "#ff6b6b";
+                }
             }
         };
     }
