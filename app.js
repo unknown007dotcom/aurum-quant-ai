@@ -672,13 +672,17 @@ const LiquidityEngine = {
         const events = [];
         const allPools = [...(pools.extreme || []), ...(pools.midExtreme || []), ...(pools.decisional || []), ...(pools.inducement || [])];
 
-        // Daily status reset (aligned with session reset)
+        // BUG FIX: Always reset _levelStatuses on every fresh scan so that repeated
+        // manual runs (e.g. multiple "Bot Preview" clicks) always re-evaluate levels
+        // from the current candle feed instead of getting locked on stale states from
+        // a previous run.  The daily-reset guard is moved INSIDE the daily-reset block
+        // only for cross-day identity (so the session-day watermark is still maintained).
         const now = new Date();
         const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
         const currentDayOfYear = Math.floor((istNow - new Date(istNow.getFullYear(), 0, 0)) / 86400000);
-        if (this._levelStatuses._lastResetDay !== currentDayOfYear && istNow.getHours() >= 5) {
-            this._levelStatuses = { _lastResetDay: currentDayOfYear };
-        }
+        // Always reset on every call — this prevents stale SWEPT/BROKEN/PENDING states
+        // from persisting across multiple preview clicks or instrument/timeframe changes.
+        this._levelStatuses = { _lastResetDay: currentDayOfYear };
 
         for (const pool of allPools) {
             if (pool.shortName === "RND" || pool.shortName === "TLE") continue; // Reactive only
@@ -918,13 +922,16 @@ const LiquidityEngine = {
                 // RULE B — BREAKOUT: strong close with momentum
                 if (closeAbove >= (minBreakDepth * 0.5) && bodyRatio >= 0.40) {
                     const hasFVG = this._checkFVGFormed(childCandles, childCandle);
+                    const fvgLabel = hasFVG.formed
+                        ? (hasFVG.pending ? ' | Pending FVG ⏳' : ' | FVG confirmed ✅')
+                        : '';
                     return {
                         type: "BREAKOUT",
                         displayName: `${pool.name} Breakout`,
                         emoji: "💥",
                         price: level,
                         childClose: close,
-                        childDetail: `Closed $${closeAbove.toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}%${hasFVG.formed ? ' | FVG confirmed' : ''}`,
+                        childDetail: `Closed $${closeAbove.toFixed(2)} above | Body ${(bodyRatio * 100).toFixed(0)}%${fvgLabel}`,
                         fvgZone: hasFVG.zone,
                         bias: "CONTINUATION UP ↑",
                         biasDirection: "continuation",
@@ -1004,13 +1011,16 @@ const LiquidityEngine = {
                 // RULE B — BREAKOUT: strong close with momentum
                 if (closeBelow >= (minBreakDepth * 0.5) && bodyRatio >= 0.40) {
                     const hasFVG = this._checkFVGFormed(childCandles, childCandle);
+                    const fvgLabel = hasFVG.formed
+                        ? (hasFVG.pending ? ' | Pending FVG ⏳' : ' | FVG confirmed ✅')
+                        : '';
                     return {
                         type: "BREAKOUT",
                         displayName: `${pool.name} Breakout`,
                         emoji: "💥",
                         price: level,
                         childClose: close,
-                        childDetail: `Closed $${closeBelow.toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}%${hasFVG.formed ? ' | FVG confirmed' : ''}`,
+                        childDetail: `Closed $${closeBelow.toFixed(2)} below | Body ${(bodyRatio * 100).toFixed(0)}%${fvgLabel}`,
                         fvgZone: hasFVG.zone,
                         bias: "CONTINUATION DOWN ↓",
                         biasDirection: "continuation",
@@ -1262,36 +1272,51 @@ const LiquidityEngine = {
     // FVG requires: candle[n-1], candle[n] (breakout), candle[n+1]
     // Bullish FVG: candle[n+1].low > candle[n-1].high
     // Bearish FVG: candle[n+1].high < candle[n-1].low
-    // NO relaxed fallback — a true breakout MUST leave an FVG
     _checkFVGFormed(candles, breakoutCandle) {
         if (!candles || candles.length < 3) return { formed: false };
         const idx = candles.indexOf(breakoutCandle);
 
-        // Standard 3-candle check: [n-1], [n], [n+1]
+        // Standard (confirmed) 3-candle check: [n-1], [n], [n+1]
+        // This is only valid when the breakout candle is NOT the latest candle,
+        // because candle[n+1] must have fully closed for the gap to be real.
         if (idx >= 1 && idx < candles.length - 1) {
             const prev = candles[idx - 1];
             const next = candles[idx + 1];
-            // Bullish FVG
+            // Bullish FVG: next candle's low is entirely above prior candle's high
             if (next.low > prev.high) {
                 return { formed: true, zone: `$${prev.high.toFixed(2)} → $${next.low.toFixed(2)}` };
             }
-            // Bearish FVG
+            // Bearish FVG: next candle's high is entirely below prior candle's low
             if (next.high < prev.low) {
                 return { formed: true, zone: `$${next.high.toFixed(2)} → $${prev.low.toFixed(2)}` };
             }
         }
 
-        // If breakout is one of the last candles, check with prior two as alternative
-        // candle[n-2] = prior, candle[n-1] = gap, candle[n] = breakout (acts as n+1)
-        if (idx >= 2) {
+        // BUG FIX — "Latest Candle" Pending-FVG Heuristic:
+        // When the breakout is on the LATEST candle (idx === candles.length - 1),
+        // candle[n+1] has NOT formed yet — so a true 3-candle FVG cannot be confirmed.
+        // Instead of falsely reporting a confirmed FVG (old broken behaviour), we now
+        // check whether the breakout candle's body itself is displaced away from the
+        // candle two bars earlier (a necessary — but not sufficient — condition for an
+        // FVG).  If true, we return { formed: true, pending: true } so the UI can label
+        // this as a "Pending FVG" rather than a fully confirmed one.
+        if (idx >= 2 && idx === candles.length - 1) {
             const priorPrior = candles[idx - 2];
-            // Bullish FVG: breakout.low > priorPrior.high
+            // Bullish body displacement: breakout candle's LOW is above candle[n-2].HIGH
             if (breakoutCandle.low > priorPrior.high) {
-                return { formed: true, zone: `$${priorPrior.high.toFixed(2)} → $${breakoutCandle.low.toFixed(2)}` };
+                return {
+                    formed: true,
+                    pending: true,
+                    zone: `$${priorPrior.high.toFixed(2)} → $${breakoutCandle.low.toFixed(2)} (Pending — await next close)`
+                };
             }
-            // Bearish FVG: breakout.high < priorPrior.low
+            // Bearish body displacement: breakout candle's HIGH is below candle[n-2].LOW
             if (breakoutCandle.high < priorPrior.low) {
-                return { formed: true, zone: `$${breakoutCandle.high.toFixed(2)} → $${priorPrior.low.toFixed(2)}` };
+                return {
+                    formed: true,
+                    pending: true,
+                    zone: `$${breakoutCandle.high.toFixed(2)} → $${priorPrior.low.toFixed(2)} (Pending — await next close)`
+                };
             }
         }
 
@@ -1627,16 +1652,25 @@ function renderLiquidityPoolsUI(pools, events) {
     const container = dom.get("#liquidityPoolsGrid");
     if (!container || !pools) return;
 
+    // BUG FIX: Key the eventMap by the composite "shortName_price" string instead of
+    // just shortName.  Using only shortName meant that all pools of the same type
+    // (e.g. every Equal High is "EQH") would overwrite each other in the map, causing
+    // every active EQH to display as "Swept" once any single one was swept.
     const eventMap = {};
     if (Array.isArray(events)) {
-        events.forEach(ev => { if (ev.pool) eventMap[ev.pool.shortName] = ev; });
+        events.forEach(ev => {
+            if (ev.pool) {
+                const key = `${ev.pool.shortName}_${ev.pool.price.toFixed(2)}`;
+                eventMap[key] = ev;
+            }
+        });
     }
 
     const renderTier = (tierName, tierKey, pools, cssClass) => {
         if (!pools || pools.length === 0) return "";
         const poolItems = pools.map(p => {
-            const ev = eventMap[p.shortName];
             const levelKey = `${p.shortName}_${p.price.toFixed(2)}`;
+            const ev = eventMap[levelKey]; // BUG FIX: use composite key, not just shortName
             const currentStatus = LiquidityEngine._levelStatuses[levelKey];
             
             let statusClass = "active";
