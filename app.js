@@ -3936,11 +3936,12 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
 function renderFibonacciOteUI(mtfData) {
     let fibPanel = document.getElementById("fibonacciOtePanel");
     if (!fibPanel) {
-        const poolsPanel = document.getElementById("liquidityPoolsPanel");
-        if (poolsPanel) {
+        const controlPanel = document.querySelector(".control-panel");
+        if (controlPanel) {
             fibPanel = document.createElement("section");
             fibPanel.className = "panel";
             fibPanel.id = "fibonacciOtePanel";
+            fibPanel.style.gridColumn = "1 / -1";
             fibPanel.innerHTML = `
                 <div class="panel-head">
                   <div>
@@ -3953,7 +3954,7 @@ function renderFibonacciOteUI(mtfData) {
                     <p style="color:var(--muted);font-size:0.85rem;">Awaiting analysis to calculate Fibonacci OTE calls...</p>
                 </div>
             `;
-            poolsPanel.parentNode.insertBefore(fibPanel, poolsPanel.nextSibling);
+            controlPanel.parentNode.insertBefore(fibPanel, controlPanel.nextSibling);
         }
     }
 
