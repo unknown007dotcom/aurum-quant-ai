@@ -3936,8 +3936,8 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
 function renderFibonacciOteUI(mtfData) {
     let fibPanel = document.getElementById("fibonacciOtePanel");
     if (!fibPanel) {
-        const controlPanel = document.querySelector(".control-panel");
-        if (controlPanel) {
+        const chartPanel = document.querySelector(".chart-panel");
+        if (chartPanel) {
             fibPanel = document.createElement("section");
             fibPanel.className = "panel";
             fibPanel.id = "fibonacciOtePanel";
@@ -3954,7 +3954,7 @@ function renderFibonacciOteUI(mtfData) {
                     <p style="color:var(--muted);font-size:0.85rem;">Awaiting analysis to calculate Fibonacci OTE calls...</p>
                 </div>
             `;
-            controlPanel.parentNode.insertBefore(fibPanel, controlPanel.nextSibling);
+            chartPanel.parentNode.insertBefore(fibPanel, chartPanel);
         }
     }
 
