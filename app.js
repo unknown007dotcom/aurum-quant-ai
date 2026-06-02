@@ -3797,75 +3797,30 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
         return null;
     }
 
-    // --- Timeframe-adaptive parameters ---
-    // Higher timeframes need smaller swing depth (fewer bars to confirm a swing)
-    // and a focused lookback window to avoid spanning years of data.
-    const tfLower = timeframeName.toLowerCase();
-    let k, lookback;
-    if (tfLower.includes("month")) {
-        k = 2; lookback = Math.min(24, candles.length);   // ~2 years of monthly bars
-    } else if (tfLower.includes("week")) {
-        k = 2; lookback = Math.min(52, candles.length);   // ~1 year of weekly bars
-    } else if (tfLower.includes("daily") || tfLower.includes("1d")) {
-        k = 3; lookback = Math.min(120, candles.length);  // ~6 months of daily bars
-    } else if (tfLower.includes("4") && tfLower.includes("h")) {
-        k = 3; lookback = Math.min(120, candles.length);  // ~20 days of 4H bars
-    } else if (tfLower.includes("1") && tfLower.includes("h")) {
-        k = 4; lookback = Math.min(200, candles.length);  // ~8 days of 1H bars
-    } else {
-        k = 4; lookback = Math.min(300, candles.length);  // intraday (5M, 15M)
-    }
+    const len = candles.length;
+    const N = 2; // Standard N=2 (5-bar fractal) for SMC/ICT swing detection
 
-    // Use only the most recent 'lookback' candles to find relevant swings
-    const recentCandles = candles.slice(-lookback);
-    const len = recentCandles.length;
-
-    if (len < (k * 2 + 1)) {
-        return null;
-    }
-
-    // Find all local swing highs and lows with the adaptive depth
+    // Find all local swing highs and lows across the entire history (stored in Cloudflare KV)
+    // We skip the first N=2 candles and the last 3 candles to ensure confirmation.
     const highs = [];
     const lows = [];
 
-    for (let i = k; i < len - k; i++) {
+    for (let i = N; i < len - 3; i++) {
         let isHigh = true;
         let isLow = true;
-        for (let j = 1; j <= k; j++) {
-            if (recentCandles[i].high <= recentCandles[i - j].high || recentCandles[i].high <= recentCandles[i + j].high) {
+        for (let j = 1; j <= N; j++) {
+            if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
                 isHigh = false;
             }
-            if (recentCandles[i].low >= recentCandles[i - j].low || recentCandles[i].low >= recentCandles[i + j].low) {
+            if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
                 isLow = false;
             }
         }
-        if (isHigh) highs.push({ price: recentCandles[i].high, index: i });
-        if (isLow) lows.push({ price: recentCandles[i].low, index: i });
+        if (isHigh) highs.push({ price: candles[i].high, index: i });
+        if (isLow) lows.push({ price: candles[i].low, index: i });
     }
 
-    // If no swings found with the primary depth, try k=1 as a minimal fallback
-    if (highs.length === 0 || lows.length === 0) {
-        const k2 = 1;
-        for (let i = k2; i < len - k2; i++) {
-            let isHigh = true;
-            let isLow = true;
-            for (let j = 1; j <= k2; j++) {
-                if (recentCandles[i].high <= recentCandles[i - j].high || recentCandles[i].high <= recentCandles[i + j].high) {
-                    isHigh = false;
-                }
-                if (recentCandles[i].low >= recentCandles[i - j].low || recentCandles[i].low >= recentCandles[i + j].low) {
-                    isLow = false;
-                }
-            }
-            if (isHigh && highs.length === 0) highs.push({ price: recentCandles[i].high, index: i });
-            if (isLow && lows.length === 0) lows.push({ price: recentCandles[i].low, index: i });
-        }
-    }
-
-    // If we STILL can't find both a swing high and swing low, return null
-    // instead of fabricating fake levels from absolute range
-    if (highs.length === 0 || lows.length === 0) return null;
-
+    // Merge and sort swings chronologically
     const allSwings = [];
     highs.forEach(h => allSwings.push({ ...h, type: 'high' }));
     lows.forEach(l => allSwings.push({ ...l, type: 'low' }));
@@ -3873,17 +3828,35 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
 
     if (allSwings.length < 2) return null;
 
-    // Find the most recent swing pair (high→low or low→high)
-    const lastSwing = allSwings[allSwings.length - 1];
-    let prevSwing = null;
-    for (let i = allSwings.length - 2; i >= 0; i--) {
-        if (allSwings[i].type !== lastSwing.type) {
-            prevSwing = allSwings[i];
-            break;
+    // ZigZag cleanup: filter out consecutive same-direction pivots
+    // (keep highest high for consecutive highs, lowest low for consecutive lows)
+    const cleanedSwings = [];
+    for (const swing of allSwings) {
+        if (cleanedSwings.length === 0) {
+            cleanedSwings.push(swing);
+            continue;
+        }
+        const last = cleanedSwings[cleanedSwings.length - 1];
+        if (last.type === swing.type) {
+            if (swing.type === 'high') {
+                if (swing.price > last.price) {
+                    cleanedSwings[cleanedSwings.length - 1] = swing;
+                }
+            } else {
+                if (swing.price < last.price) {
+                    cleanedSwings[cleanedSwings.length - 1] = swing;
+                }
+            }
+        } else {
+            cleanedSwings.push(swing);
         }
     }
 
-    if (!prevSwing) return null;
+    if (cleanedSwings.length < 2) return null;
+
+    // Identify the most recent completed alternating swing leg
+    const prevSwing = cleanedSwings[cleanedSwings.length - 2];
+    const lastSwing = cleanedSwings[cleanedSwings.length - 1];
 
     const isBullishImpulse = lastSwing.type === 'high' && prevSwing.type === 'low';
     const highPrice = isBullishImpulse ? lastSwing.price : prevSwing.price;
@@ -3892,10 +3865,7 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
 
     if (range <= 0) return null;
 
-    // Sanity check: reject if the range is unreasonably large relative to current price
-    // (e.g., >30% of price for higher timeframes suggests stale/spanning data)
-    if (range > currentPrice * 0.30) return null;
-
+    // Calculate standard Fibonacci OTE levels
     let levels = {};
     if (isBullishImpulse) {
         levels = {
@@ -3929,7 +3899,7 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
         }
     } else {
         if (currentPrice >= levels[0.618] && currentPrice <= levels[0.705]) {
-            statusClass = "swept";
+            statusClass = "tracking";
             statusText = "SELL ZONE 🔴";
         } else if (currentPrice < levels[0.618]) {
             statusClass = "pending";
