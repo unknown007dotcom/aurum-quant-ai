@@ -1587,29 +1587,52 @@ async function runAnalysis() {
 
         // --- Step 1: Fetch market data ---
         let res, mtfData;
+        const fetchUrl = apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`);
+        let fetchSuccess = false;
+        let primaryErrMessage = "";
+
         try {
-            res = await fetch(apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`));
-            mtfData = await res.json().catch(() => ({}));
+            res = await fetch(fetchUrl);
+            if (res.ok) {
+                mtfData = await res.json().catch(() => ({}));
+                if (mtfData && Array.isArray(mtfData.data)) {
+                    fetchSuccess = true;
+                } else {
+                    primaryErrMessage = "Malformed data payload (missing data array)";
+                }
+            } else {
+                const errPayload = await res.json().catch(() => ({}));
+                primaryErrMessage = `HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
+            }
         } catch (fetchErr) {
+            primaryErrMessage = fetchErr.message;
+        }
+
+        if (!fetchSuccess) {
+            console.warn(`Cloudflare backend failed (${primaryErrMessage}). Retrying with local Vercel API fallback...`);
+            const fallbackUrl = `/api${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
+            try {
+                res = await fetch(fallbackUrl);
+                if (res.ok) {
+                    mtfData = await res.json().catch(() => ({}));
+                    if (mtfData && Array.isArray(mtfData.data)) {
+                        fetchSuccess = true;
+                    } else {
+                        primaryErrMessage += ` | Fallback: Malformed data payload`;
+                    }
+                } else {
+                    const errPayload = await res.json().catch(() => ({}));
+                    primaryErrMessage += ` | Fallback: HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
+                }
+            } catch (fallbackErr) {
+                primaryErrMessage += ` | Fallback Error: ${fallbackErr.message}`;
+            }
+        }
+
+        if (!fetchSuccess) {
             showAnalysisError(
                 "Market Data Unreachable",
-                `Cannot connect to the Cloudflare backend.\n\nURL: ${EDGE_API_BASE}\nError: ${fetchErr.message}\n\nCheck your internet connection or that the Cloudflare Worker is deployed.`
-            );
-            return;
-        }
-
-        if (!res.ok) {
-            showAnalysisError(
-                "Market Data Stream Failed",
-                `Worker returned HTTP ${res.status}.\n\nMessage: ${mtfData?.message || mtfData?.errorMessage || "Unknown error"}\n\nThis usually means OANDA_API_TOKEN is not configured in your Cloudflare Worker secrets.`
-            );
-            return;
-        }
-
-        if (!mtfData?.data || !Array.isArray(mtfData.data)) {
-            showAnalysisError(
-                "Invalid Market Data",
-                `Worker returned an unexpected payload.\n\nReceived: ${JSON.stringify(mtfData).slice(0, 300)}`
+                `Failed to fetch market data from both Cloudflare and Vercel/local backends.\n\nErrors encountered:\n${primaryErrMessage}\n\nPlease check your configuration and network connection.`
             );
             return;
         }
@@ -2776,10 +2799,38 @@ async function runLiquidityScanSilent() {
     if (state.isRunning) return; // Skip if main analysis is busy
     try {
         const symbol = encodeURIComponent(state.botInstrument || "XAU_USD");
-        const res = await fetch(apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`));
-        const mtfData = await res.json().catch(() => ({}));
-        
-        if (!res.ok || !mtfData?.data || !Array.isArray(mtfData.data)) return;
+        let res, mtfData;
+        const fetchUrl = apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`);
+        let fetchSuccess = false;
+
+        try {
+            res = await fetch(fetchUrl);
+            if (res.ok) {
+                mtfData = await res.json().catch(() => ({}));
+                if (mtfData && Array.isArray(mtfData.data)) {
+                    fetchSuccess = true;
+                }
+            }
+        } catch (e) {
+            // Ignore primary error and try fallback
+        }
+
+        if (!fetchSuccess) {
+            const fallbackUrl = `/api${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
+            try {
+                res = await fetch(fallbackUrl);
+                if (res.ok) {
+                    mtfData = await res.json().catch(() => ({}));
+                    if (mtfData && Array.isArray(mtfData.data)) {
+                        fetchSuccess = true;
+                    }
+                }
+            } catch (e) {
+                // Both failed
+            }
+        }
+
+        if (!fetchSuccess || !mtfData) return;
         
         const liquidityPools = LiquidityEngine.computeLiquidityPools(mtfData);
         const liquidityEvents = LiquidityEngine.scanAllLiquidityEvents(liquidityPools, mtfData);
