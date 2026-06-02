@@ -3793,59 +3793,78 @@ function showTrackerModal(stepName) {
  * Generates clear Buy/Sell/Wait calls based on the OTE Golden Pocket.
  */
 function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
-    if (!candles || candles.length < 15) {
+    if (!candles || candles.length < 10) {
         return null;
     }
 
-    // Find all local swings of depth 4
+    // --- Timeframe-adaptive parameters ---
+    // Higher timeframes need smaller swing depth (fewer bars to confirm a swing)
+    // and a focused lookback window to avoid spanning years of data.
+    const tfLower = timeframeName.toLowerCase();
+    let k, lookback;
+    if (tfLower.includes("month")) {
+        k = 2; lookback = Math.min(24, candles.length);   // ~2 years of monthly bars
+    } else if (tfLower.includes("week")) {
+        k = 2; lookback = Math.min(52, candles.length);   // ~1 year of weekly bars
+    } else if (tfLower.includes("daily") || tfLower.includes("1d")) {
+        k = 3; lookback = Math.min(120, candles.length);  // ~6 months of daily bars
+    } else if (tfLower.includes("4") && tfLower.includes("h")) {
+        k = 3; lookback = Math.min(120, candles.length);  // ~20 days of 4H bars
+    } else if (tfLower.includes("1") && tfLower.includes("h")) {
+        k = 4; lookback = Math.min(200, candles.length);  // ~8 days of 1H bars
+    } else {
+        k = 4; lookback = Math.min(300, candles.length);  // intraday (5M, 15M)
+    }
+
+    // Use only the most recent 'lookback' candles to find relevant swings
+    const recentCandles = candles.slice(-lookback);
+    const len = recentCandles.length;
+
+    if (len < (k * 2 + 1)) {
+        return null;
+    }
+
+    // Find all local swing highs and lows with the adaptive depth
     const highs = [];
     const lows = [];
-    const len = candles.length;
-    const k = 4;
-    
+
     for (let i = k; i < len - k; i++) {
         let isHigh = true;
         let isLow = true;
         for (let j = 1; j <= k; j++) {
-            if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+            if (recentCandles[i].high <= recentCandles[i - j].high || recentCandles[i].high <= recentCandles[i + j].high) {
                 isHigh = false;
             }
-            if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+            if (recentCandles[i].low >= recentCandles[i - j].low || recentCandles[i].low >= recentCandles[i + j].low) {
                 isLow = false;
             }
         }
-        if (isHigh) highs.push({ price: candles[i].high, index: i });
-        if (isLow) lows.push({ price: candles[i].low, index: i });
+        if (isHigh) highs.push({ price: recentCandles[i].high, index: i });
+        if (isLow) lows.push({ price: recentCandles[i].low, index: i });
     }
 
-    // Fallback if no swings found: search with smaller depth
+    // If no swings found with the primary depth, try k=1 as a minimal fallback
     if (highs.length === 0 || lows.length === 0) {
-        const k2 = 2;
+        const k2 = 1;
         for (let i = k2; i < len - k2; i++) {
             let isHigh = true;
             let isLow = true;
             for (let j = 1; j <= k2; j++) {
-                if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+                if (recentCandles[i].high <= recentCandles[i - j].high || recentCandles[i].high <= recentCandles[i + j].high) {
                     isHigh = false;
                 }
-                if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+                if (recentCandles[i].low >= recentCandles[i - j].low || recentCandles[i].low >= recentCandles[i + j].low) {
                     isLow = false;
                 }
             }
-            if (isHigh) highs.push({ price: candles[i].high, index: i });
-            if (isLow) lows.push({ price: candles[i].low, index: i });
+            if (isHigh && highs.length === 0) highs.push({ price: recentCandles[i].high, index: i });
+            if (isLow && lows.length === 0) lows.push({ price: recentCandles[i].low, index: i });
         }
     }
 
-    // Secondary fallback: use absolute highs and lows of the last 40 candles
-    if (highs.length === 0 || lows.length === 0) {
-        const sliceSize = Math.min(40, len);
-        const recentCandles = candles.slice(-sliceSize);
-        const absHigh = Math.max(...recentCandles.map(c => c.high));
-        const absLow = Math.min(...recentCandles.map(c => c.low));
-        highs.push({ price: absHigh, index: len - Math.floor(sliceSize / 2) });
-        lows.push({ price: absLow, index: len - sliceSize });
-    }
+    // If we STILL can't find both a swing high and swing low, return null
+    // instead of fabricating fake levels from absolute range
+    if (highs.length === 0 || lows.length === 0) return null;
 
     const allSwings = [];
     highs.forEach(h => allSwings.push({ ...h, type: 'high' }));
@@ -3854,6 +3873,7 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
 
     if (allSwings.length < 2) return null;
 
+    // Find the most recent swing pair (high→low or low→high)
     const lastSwing = allSwings[allSwings.length - 1];
     let prevSwing = null;
     for (let i = allSwings.length - 2; i >= 0; i--) {
@@ -3871,6 +3891,10 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
     const range = highPrice - lowPrice;
 
     if (range <= 0) return null;
+
+    // Sanity check: reject if the range is unreasonably large relative to current price
+    // (e.g., >30% of price for higher timeframes suggests stale/spanning data)
+    if (range > currentPrice * 0.30) return null;
 
     let levels = {};
     if (isBullishImpulse) {
