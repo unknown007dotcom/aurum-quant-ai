@@ -1608,14 +1608,17 @@ function detectLiquiditySweeps(mtfData) {
   
   const sweeps = [];
   const diagnosticLogs = [];
-
-  const evaluateEvent = (levelName, levelPrice, childCandles, isHigh) => {
+  const evaluateEvent = (levelName, levelPrice, childCandles, isHigh, formedAt) => {
     const closedCandles = childCandles.filter(c => c.complete !== false);
     if (closedCandles.length < 2) return;
-    // Use second-to-last closed candle to avoid live candle
-    const candidates = closedCandles.slice(-6, -1);
+    // Use the latest closed candles (including the most recent one)
+    const candidates = closedCandles.slice(-6);
 
     for (const current of candidates) {
+      // --- TEMPORAL PARADOX FILTER ---
+      const currentVal = new Date(current.datetime || current._ts).getTime();
+      if (formedAt && currentVal < formedAt) continue;
+
       const bodySize = Math.abs(current.close - current.open);
       const totalRange = current.high - current.low;
       const bodyRatio = totalRange > 0 ? bodySize / totalRange : 0;
@@ -1670,36 +1673,41 @@ function detectLiquiditySweeps(mtfData) {
     const prevQ = monthly.slice(-4, -1);
     const pqh = Math.max(...prevQ.map(c => c.high));
     const pql = Math.min(...prevQ.map(c => c.low));
-    evaluateEvent("PQH (Prev Quarter High)", pqh, monthly, true);
-    evaluateEvent("PQL (Prev Quarter Low)", pql, monthly, false);
+    const formedAt = new Date(monthly[monthly.length - 1].datetime || monthly[monthly.length - 1]._ts).getTime();
+    evaluateEvent("PQH (Prev Quarter High)", pqh, monthly, true, formedAt);
+    evaluateEvent("PQL (Prev Quarter Low)", pql, monthly, false, formedAt);
   }
 
   // 1. Monthly (Parent) -> Weekly (Child)
   if (monthly.length >= 2) {
     const prev = monthly[monthly.length - 2];
-    evaluateEvent("PMH (Prev Month High)", prev.high, weekly, true);
-    evaluateEvent("PML (Prev Month Low)", prev.low, weekly, false);
+    const formedAt = new Date(monthly[monthly.length - 1].datetime || monthly[monthly.length - 1]._ts).getTime();
+    evaluateEvent("PMH (Prev Month High)", prev.high, weekly, true, formedAt);
+    evaluateEvent("PML (Prev Month Low)", prev.low, weekly, false, formedAt);
   }
 
   // 2. Weekly (Parent) -> Daily (Child)
   if (weekly.length >= 2) {
     const prev = weekly[weekly.length - 2];
-    evaluateEvent("PWH (Prev Week High)", prev.high, daily, true);
-    evaluateEvent("PWL (Prev Week Low)", prev.low, daily, false);
+    const formedAt = new Date(weekly[weekly.length - 1].datetime || weekly[weekly.length - 1]._ts).getTime();
+    evaluateEvent("PWH (Prev Week High)", prev.high, daily, true, formedAt);
+    evaluateEvent("PWL (Prev Week Low)", prev.low, daily, false, formedAt);
   }
 
   // 3. Daily (Parent) -> 4H (Child)
   if (daily.length >= 2) {
     const prev = daily[daily.length - 2];
-    evaluateEvent("PDH (Prev Day High)", prev.high, h4, true);
-    evaluateEvent("PDL (Prev Day Low)", prev.low, h4, false);
+    const formedAt = new Date(daily[daily.length - 1].datetime || daily[daily.length - 1]._ts).getTime();
+    evaluateEvent("PDH (Prev Day High)", prev.high, h4, true, formedAt);
+    evaluateEvent("PDL (Prev Day Low)", prev.low, h4, false, formedAt);
   }
 
   // 3.5 4H (Parent) -> 15M (Child)
   if (h4.length >= 2) {
     const prev = h4[h4.length - 2];
-    evaluateEvent("P4H (Prev 4H High)", prev.high, m15, true);
-    evaluateEvent("P4L (Prev 4H Low)", prev.low, m15, false);
+    const formedAt = new Date(h4[h4.length - 1].datetime || h4[h4.length - 1]._ts).getTime();
+    evaluateEvent("P4H (Prev 4H High)", prev.high, m15, true, formedAt);
+    evaluateEvent("P4L (Prev 4H Low)", prev.low, m15, false, formedAt);
   }
 
   // 4. Session High/Low (Asian/London) -> 5M (Child)
@@ -1733,12 +1741,14 @@ function detectLiquiditySweeps(mtfData) {
     
     // Only evaluate session if it's strictly over based on the current hour of the latest H1 candle
     if (hasAsian && currentHourUTC >= 7) {
-      evaluateEvent("Asian High", asianHigh, m5, true);
-      evaluateEvent("Asian Low", asianLow, m5, false);
+      const formedAt = new Date(todayStr + "T07:00:00Z").getTime();
+      evaluateEvent("Asian High", asianHigh, m5, true, formedAt);
+      evaluateEvent("Asian Low", asianLow, m5, false, formedAt);
     }
     if (hasLondon && currentHourUTC >= 12) {
-      evaluateEvent("London High", londonHigh, m5, true);
-      evaluateEvent("London Low", londonLow, m5, false);
+      const formedAt = new Date(todayStr + "T12:00:00Z").getTime();
+      evaluateEvent("London High", londonHigh, m5, true, formedAt);
+      evaluateEvent("London Low", londonLow, m5, false, formedAt);
     }
   }
 

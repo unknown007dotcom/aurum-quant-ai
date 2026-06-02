@@ -598,18 +598,20 @@ const LiquidityEngine = {
         // 🔴 EXTREME POINT — Previous Month / Quarter Highs & Lows
         if (monthly.length >= 2) {
             const prevMonth = monthly.at(-2);
+            const currentMonthTime = new Date(monthly.at(-1).datetime).getTime();
             pools.extreme.push(
-                { name: "Previous Month High", shortName: "PMH", price: prevMonth.high, side: "high", parent: "Monthly", childTf: "1week", tier: "extreme" },
-                { name: "Previous Month Low", shortName: "PML", price: prevMonth.low, side: "low", parent: "Monthly", childTf: "1week", tier: "extreme" }
+                { name: "Previous Month High", shortName: "PMH", price: prevMonth.high, side: "high", parent: "Monthly", childTf: "1week", tier: "extreme", formedAt: currentMonthTime },
+                { name: "Previous Month Low", shortName: "PML", price: prevMonth.low, side: "low", parent: "Monthly", childTf: "1week", tier: "extreme", formedAt: currentMonthTime }
             );
         }
         // Quarterly from monthly data (group by calendar quarter)
         if (monthly.length >= 4) {
             const quarterly = this._computeQuarterly(monthly);
+            const currentMonthTime = new Date(monthly.at(-1).datetime).getTime();
             if (quarterly) {
                 pools.extreme.push(
-                    { name: "Previous Quarter High", shortName: "PQH", price: quarterly.high, side: "high", parent: "Quarterly", childTf: "1week", tier: "extreme" },
-                    { name: "Previous Quarter Low", shortName: "PQL", price: quarterly.low, side: "low", parent: "Quarterly", childTf: "1week", tier: "extreme" }
+                    { name: "Previous Quarter High", shortName: "PQH", price: quarterly.high, side: "high", parent: "Quarterly", childTf: "1week", tier: "extreme", formedAt: currentMonthTime },
+                    { name: "Previous Quarter Low", shortName: "PQL", price: quarterly.low, side: "low", parent: "Quarterly", childTf: "1week", tier: "extreme", formedAt: currentMonthTime }
                 );
             }
         }
@@ -617,37 +619,43 @@ const LiquidityEngine = {
         // 🟠 MID-EXTREME POINT — PDH/PDL, PWH/PWL
         if (daily.length >= 2) {
             const prevDay = daily.at(-2);
+            const currentDayTime = new Date(daily.at(-1).datetime).getTime();
             pools.midExtreme.push(
-                { name: "Previous Day High", shortName: "PDH", price: prevDay.high, side: "high", parent: "Daily", childTf: "4h", tier: "midExtreme" },
-                { name: "Previous Day Low", shortName: "PDL", price: prevDay.low, side: "low", parent: "Daily", childTf: "4h", tier: "midExtreme" }
+                { name: "Previous Day High", shortName: "PDH", price: prevDay.high, side: "high", parent: "Daily", childTf: "4h", tier: "midExtreme", formedAt: currentDayTime },
+                { name: "Previous Day Low", shortName: "PDL", price: prevDay.low, side: "low", parent: "Daily", childTf: "4h", tier: "midExtreme", formedAt: currentDayTime }
             );
         }
         if (weekly.length >= 2) {
             const prevWeek = weekly.at(-2);
+            const currentWeekTime = new Date(weekly.at(-1).datetime).getTime();
             pools.midExtreme.push(
-                { name: "Previous Week High", shortName: "PWH", price: prevWeek.high, side: "high", parent: "Weekly", childTf: "1day", tier: "midExtreme" },
-                { name: "Previous Week Low", shortName: "PWL", price: prevWeek.low, side: "low", parent: "Weekly", childTf: "1day", tier: "midExtreme" }
+                { name: "Previous Week High", shortName: "PWH", price: prevWeek.high, side: "high", parent: "Weekly", childTf: "1day", tier: "midExtreme", formedAt: currentWeekTime },
+                { name: "Previous Week Low", shortName: "PWL", price: prevWeek.low, side: "low", parent: "Weekly", childTf: "1day", tier: "midExtreme", formedAt: currentWeekTime }
             );
         }
 
         // 🟡 DECISIONAL POINT — Asian / London Session H/L
         const sessionLevels = this.detectSessionHighsLows(h1);
+        const todayStart = this._sessionState.todayStartUTC || 0;
         if (sessionLevels.asianHigh !== null) {
+            const formedAt = todayStart + 7 * 60 * 60 * 1000;
             pools.decisional.push(
-                { name: "Asian Session High", shortName: "ASH", price: sessionLevels.asianHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.asianLocked ? "locked" : "tracking" },
-                { name: "Asian Session Low", shortName: "ASL", price: sessionLevels.asianLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.asianLocked ? "locked" : "tracking" }
+                { name: "Asian Session High", shortName: "ASH", price: sessionLevels.asianHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.asianLocked ? "locked" : "tracking", formedAt },
+                { name: "Asian Session Low", shortName: "ASL", price: sessionLevels.asianLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.asianLocked ? "locked" : "tracking", formedAt }
             );
         }
         if (sessionLevels.londonHigh !== null) {
+            const formedAt = todayStart + 12 * 60 * 60 * 1000;
             pools.decisional.push(
-                { name: "London Session High", shortName: "LSH", price: sessionLevels.londonHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.londonLocked ? "locked" : "tracking" },
-                { name: "London Session Low", shortName: "LSL", price: sessionLevels.londonLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.londonLocked ? "locked" : "tracking" }
+                { name: "London Session High", shortName: "LSH", price: sessionLevels.londonHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.londonLocked ? "locked" : "tracking", formedAt },
+                { name: "London Session Low", shortName: "LSL", price: sessionLevels.londonLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.londonLocked ? "locked" : "tracking", formedAt }
             );
         }
         if (sessionLevels.nyHigh !== null) {
+            const formedAt = todayStart + 17.5 * 60 * 60 * 1000;
             pools.decisional.push(
-                { name: "New York Session High", shortName: "NYH", price: sessionLevels.nyHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.nyLocked ? "locked" : "tracking" },
-                { name: "New York Session Low", shortName: "NYL", price: sessionLevels.nyLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.nyLocked ? "locked" : "tracking" }
+                { name: "New York Session High", shortName: "NYH", price: sessionLevels.nyHigh, side: "high", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.nyLocked ? "locked" : "tracking", formedAt },
+                { name: "New York Session Low", shortName: "NYL", price: sessionLevels.nyLow, side: "low", parent: "Session", childTf: "1h", tier: "decisional", sessionStatus: sessionLevels.nyLocked ? "locked" : "tracking", formedAt }
             );
         }
 
@@ -732,12 +740,28 @@ const LiquidityEngine = {
                 maxLookback = Math.min(20, childCandles.length);   // Inducement / default
             }
 
+            // Determine the index of the latest completed candle from the end
+            let latestCompletedIdx = 1;
+            for (let k = 1; k <= childCandles.length; k++) {
+                if (childCandles.at(-k).complete !== false) {
+                    latestCompletedIdx = k;
+                    break;
+                }
+            }
+
             let foundConfirmed = false;
             let sawPendingOnLatest = false;
 
             for (let i = 1; i <= maxLookback; i++) {
                 const child = childCandles.at(-i);
                 const prior = (childCandles.length >= i + 1) ? childCandles.at(-(i + 1)) : null;
+
+                // --- TEMPORAL PARADOX FILTER ---
+                // Only evaluate child candles that occurred at or after the level's formation timestamp!
+                const childTime = new Date(child.datetime).getTime();
+                if (pool.formedAt && childTime < pool.formedAt) {
+                    continue; 
+                }
 
                 const event = this.classifyEvent(child, pool, prior, childCandles);
 
@@ -759,7 +783,7 @@ const LiquidityEngine = {
                     
                     event.nextTP = this._findNextTP(allPools, pool, event.type, child.close);
 
-                    if (i > 1) {
+                    if (i > latestCompletedIdx) {
                         event._dead = true;
                         event.type = event.type === "SWEEP" ? "SWEPT" : "BROKEN";
                         event.strength = "Historical";
@@ -779,7 +803,7 @@ const LiquidityEngine = {
                 }
                 
                 // Pending is weak evidence. Keep scanning; do not let it hide a true older confirmation.
-                if (event && event.type === "PENDING" && i === 1) {
+                if (event && event.type === "PENDING" && i === latestCompletedIdx) {
                     sawPendingOnLatest = true;
                 }
                 // TAP on live candle: skip silently
@@ -788,7 +812,7 @@ const LiquidityEngine = {
                 }
             }
 
-            // PENDING is allowed only for the most recent candle and never overwrites confirmed states.
+            // PENDING is allowed only for the most recent completed candle and never overwrites confirmed states.
             if (!foundConfirmed && sawPendingOnLatest && currentStatus !== "SWEPT" && currentStatus !== "BROKEN") {
                 this._levelStatuses[levelKey] = "PENDING";
             }
@@ -1220,12 +1244,13 @@ const LiquidityEngine = {
         // Find clusters of equal highs
         for (let i = 0; i < highs.length; i++) {
             for (let j = i + 1; j < highs.length; j++) {
-                if (Math.abs(highs[i] - highs[j]) <= tolerance) {
-                    const avgPrice = (highs[i] + highs[j]) / 2;
+                if (Math.abs(highs[i].price - highs[j].price) <= tolerance) {
+                    const avgPrice = (highs[i].price + highs[j].price) / 2;
+                    const formedAt = Math.max(highs[i].time, highs[j].time);
                     if (!levels.some(l => Math.abs(l.price - avgPrice) < 1.0)) {
                         levels.push({
                             name: "Equal Highs", shortName: "EQH", price: avgPrice,
-                            side: "high", parent: "Any", childTf: "15min", tier: "inducement"
+                            side: "high", parent: "Any", childTf: "15min", tier: "inducement", formedAt
                         });
                     }
                 }
@@ -1234,12 +1259,13 @@ const LiquidityEngine = {
         // Find clusters of equal lows
         for (let i = 0; i < lows.length; i++) {
             for (let j = i + 1; j < lows.length; j++) {
-                if (Math.abs(lows[i] - lows[j]) <= tolerance) {
-                    const avgPrice = (lows[i] + lows[j]) / 2;
+                if (Math.abs(lows[i].price - lows[j].price) <= tolerance) {
+                    const avgPrice = (lows[i].price + lows[j].price) / 2;
+                    const formedAt = Math.max(lows[i].time, lows[j].time);
                     if (!levels.some(l => Math.abs(l.price - avgPrice) < 1.0)) {
                         levels.push({
                             name: "Equal Lows", shortName: "EQL", price: avgPrice,
-                            side: "low", parent: "Any", childTf: "15min", tier: "inducement"
+                            side: "low", parent: "Any", childTf: "15min", tier: "inducement", formedAt
                         });
                     }
                 }
@@ -1258,15 +1284,17 @@ const LiquidityEngine = {
         if (swings.highs.length > 0) {
             const recentHigh = swings.highs[swings.highs.length - 1];
             levels.push({
-                name: "Swing High", shortName: "SWH", price: recentHigh,
-                side: "high", parent: "Any", childTf: h4Candles.length >= 10 ? "4h" : "1h", tier: "inducement"
+                name: "Swing High", shortName: "SWH", price: recentHigh.price,
+                side: "high", parent: "Any", childTf: h4Candles.length >= 10 ? "4h" : "1h", tier: "inducement",
+                formedAt: recentHigh.time
             });
         }
         if (swings.lows.length > 0) {
             const recentLow = swings.lows[swings.lows.length - 1];
             levels.push({
-                name: "Swing Low", shortName: "SWL", price: recentLow,
-                side: "low", parent: "Any", childTf: h4Candles.length >= 10 ? "4h" : "1h", tier: "inducement"
+                name: "Swing Low", shortName: "SWL", price: recentLow.price,
+                side: "low", parent: "Any", childTf: h4Candles.length >= 10 ? "4h" : "1h", tier: "inducement",
+                formedAt: recentLow.time
             });
         }
         return levels;
@@ -1279,11 +1307,11 @@ const LiquidityEngine = {
         for (let i = 2; i < candles.length - 2; i++) {
             if (candles[i].high > candles[i - 1].high && candles[i].high > candles[i - 2].high &&
                 candles[i].high > candles[i + 1].high && candles[i].high > candles[i + 2].high) {
-                highs.push(candles[i].high);
+                highs.push({ price: candles[i].high, time: new Date(candles[i].datetime).getTime() });
             }
             if (candles[i].low < candles[i - 1].low && candles[i].low < candles[i - 2].low &&
                 candles[i].low < candles[i + 1].low && candles[i].low < candles[i + 2].low) {
-                lows.push(candles[i].low);
+                lows.push({ price: candles[i].low, time: new Date(candles[i].datetime).getTime() });
             }
         }
         return { highs, lows };
