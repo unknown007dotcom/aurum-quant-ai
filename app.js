@@ -272,6 +272,81 @@ const AnalysisEngine = {
         ];
     },
 
+    detectSwings(candles, strength) {
+        const highs = [];
+        const lows = [];
+        for (let i = strength; i < candles.length - strength; i++) {
+            let isHigh = true;
+            let isLow = true;
+            for (let j = 1; j <= strength; j++) {
+                if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) isHigh = false;
+                if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) isLow = false;
+            }
+            if (isHigh) highs.push({ index: i, price: candles[i].high });
+            if (isLow) lows.push({ index: i, price: candles[i].low });
+        }
+        return { highs, lows };
+    },
+
+    detectFibonacci(candles, currentPrice) {
+        const swings = this.detectSwings(candles, 3);
+        if (!swings || !swings.highs.length || !swings.lows.length) return null;
+
+        const allSwings = [];
+        swings.highs.forEach(s => allSwings.push({ ...s, type: 'high' }));
+        swings.lows.forEach(s => allSwings.push({ ...s, type: 'low' }));
+        allSwings.sort((a, b) => a.index - b.index);
+
+        if (allSwings.length < 2) return null;
+
+        const lastSwing = allSwings[allSwings.length - 1];
+        let prevSwing = null;
+        for (let i = allSwings.length - 2; i >= 0; i--) {
+            if (allSwings[i].type !== lastSwing.type) {
+                prevSwing = allSwings[i];
+                break;
+            }
+        }
+
+        if (!prevSwing) return null;
+
+        const isBullishImpulse = lastSwing.type === 'high' && prevSwing.type === 'low';
+        
+        let highPrice = isBullishImpulse ? lastSwing.price : prevSwing.price;
+        let lowPrice = !isBullishImpulse ? lastSwing.price : prevSwing.price;
+        let range = highPrice - lowPrice;
+
+        if (range <= 0) return null;
+
+        let levels = {};
+        if (isBullishImpulse) {
+            levels = { 0: highPrice, 0.618: highPrice - (range * 0.618), 0.705: highPrice - (range * 0.705), 1: lowPrice };
+        } else {
+            levels = { 0: lowPrice, 0.618: lowPrice + (range * 0.618), 0.705: lowPrice + (range * 0.705), 1: highPrice };
+        }
+
+        let inEntryZone = isBullishImpulse 
+            ? (currentPrice <= levels[0.618] && currentPrice >= levels[0.705])
+            : (currentPrice >= levels[0.618] && currentPrice <= levels[0.705]);
+
+        return {
+            isBullishImpulse,
+            levels,
+            inEntryZone,
+            action: isBullishImpulse ? "Buy" : "Sell",
+            tp: levels[0],
+            sl: levels[1],
+            displayList: [
+                `Direction: ${isBullishImpulse ? 'Bullish' : 'Bearish'} Retracement`,
+                `Level 0 (TP): ${levels[0].toFixed(2)}`,
+                `Level 0.618 (Entry): ${levels[0.618].toFixed(2)}`,
+                `Level 0.705 (Entry): ${levels[0.705].toFixed(2)}`,
+                `Level 1 (SL): ${levels[1].toFixed(2)}`,
+                `Status: ${inEntryZone ? '🟢 IN ENTRY ZONE' : '⚪ Pending'}`
+            ]
+        };
+    },
+
     run(mtfData) {
         const entry = this.normalizeCandles(mtfData.data.find(d => d.id === "entry")?.values || []);
         if (!entry.length) {
@@ -298,6 +373,7 @@ const AnalysisEngine = {
         const fvgs = this.detectFairValueGaps(entry);
         const structureEvents = this.detectStructureEvents(entry);
         const orderBlocks = this.detectOrderBlocks(entry, trend);
+        const fibonacci = this.detectFibonacci(entry, currentPrice);
         const reversalZones = fvgs.length
             ? fvgs.slice(0, 3).map(f => `${f.side === "bullish" ? "Discount" : "Premium"} reversal zone near ${f.price.toFixed(2)}`)
             : ["No immediate reversal gap. Follow primary trend."];
@@ -505,6 +581,25 @@ const AnalysisEngine = {
             }
         }
 
+        let action = trend === "bullish" ? "Buy" : "Sell";
+        let tradePlan = [
+            `Institutional Regime: ${trend.toUpperCase()}`,
+            `RMI Momentum: ${state.rmiBias.toUpperCase()}`,
+            `Fair Value Gaps detected: ${fvgs.length}`,
+            `Targeting next institutional liquidity pool.`
+        ];
+
+        if (fibonacci && fibonacci.inEntryZone) {
+            action = fibonacci.action;
+            confidence += 30; // Strong signal when in golden zone
+            calcTp1 = fibonacci.tp;
+            calcTp2 = fibonacci.tp;
+            calcStop = fibonacci.sl;
+            tradePlan.push(`Fibonacci Golden Zone active. Target 0 at ${calcTp1.toFixed(2)}. SL 1 at ${calcStop.toFixed(2)}.`);
+        }
+        
+        confidence = Math.min(95, Math.max(30, confidence));
+
         return {
             price: currentPrice,
             trend,
@@ -520,19 +615,15 @@ const AnalysisEngine = {
             lifecycle,
             heatmap: this.buildHeatmap(currentPrice, trend, state.rmiBias, htfAlignment),
             equationsText,
+            fibonacci,
             decision: {
-                action: trend === "bullish" ? "Buy" : "Sell",
+                action: action,
                 confidence,
-                score: trend === "bullish" ? 3 : -3,
+                score: action === "Buy" ? 3 : -3,
                 tp1: calcTp1,
                 tp2: calcTp2,
                 stopPrice: calcStop,
-                tradePlan: [
-                    `Institutional Regime: ${trend.toUpperCase()}`,
-                    `RMI Momentum: ${state.rmiBias.toUpperCase()}`,
-                    `Fair Value Gaps detected: ${fvgs.length}`,
-                    `Targeting next institutional liquidity pool.`
-                ]
+                tradePlan: tradePlan
             }
         };
     }
@@ -1544,6 +1635,7 @@ async function runAnalysis() {
 
         state.lastAnalysisData = analysis;
         renderMarketUI(analysis);
+        renderFibonacciOteUI(mtfData);
 
         // --- Step 2: Consult AI arbiter ---
         dom.setStatus("Consulting Arbiter Council for Consensus...");
@@ -2698,6 +2790,7 @@ async function runLiquidityScanSilent() {
         state.lastAnalysisData.sessionLevels = LiquidityEngine._sessionState;
         
         renderLiquidityPoolsUI(liquidityPools, liquidityEvents);
+        renderFibonacciOteUI(mtfData);
         renderLiquidityEventBox(liquidityEvents);
         fireAllLiquidityNotifications(liquidityEvents);
     } catch (e) {
@@ -3691,4 +3784,239 @@ function showTrackerModal(stepName) {
   modal.style.display = "grid";
   modal.classList.add("open");
   modal.setAttribute("aria-hidden", "false");
+}
+
+// --- ICT Optimal Trade Entry (OTE) Fibonacci Calculations ---
+
+/**
+ * Automatically computes swing highs/lows and maps standard 0, 0.618, 0.705, 1.0 Fibonacci levels.
+ * Generates clear Buy/Sell/Wait calls based on the OTE Golden Pocket.
+ */
+function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
+    if (!candles || candles.length < 15) {
+        return null;
+    }
+
+    // Find all local swings of depth 4
+    const highs = [];
+    const lows = [];
+    const len = candles.length;
+    const k = 4;
+    
+    for (let i = k; i < len - k; i++) {
+        let isHigh = true;
+        let isLow = true;
+        for (let j = 1; j <= k; j++) {
+            if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+                isHigh = false;
+            }
+            if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+                isLow = false;
+            }
+        }
+        if (isHigh) highs.push({ price: candles[i].high, index: i });
+        if (isLow) lows.push({ price: candles[i].low, index: i });
+    }
+
+    // Fallback if no swings found: search with smaller depth
+    if (highs.length === 0 || lows.length === 0) {
+        const k2 = 2;
+        for (let i = k2; i < len - k2; i++) {
+            let isHigh = true;
+            let isLow = true;
+            for (let j = 1; j <= k2; j++) {
+                if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+                    isHigh = false;
+                }
+                if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+                    isLow = false;
+                }
+            }
+            if (isHigh) highs.push({ price: candles[i].high, index: i });
+            if (isLow) lows.push({ price: candles[i].low, index: i });
+        }
+    }
+
+    // Secondary fallback: use absolute highs and lows of the last 40 candles
+    if (highs.length === 0 || lows.length === 0) {
+        const sliceSize = Math.min(40, len);
+        const recentCandles = candles.slice(-sliceSize);
+        const absHigh = Math.max(...recentCandles.map(c => c.high));
+        const absLow = Math.min(...recentCandles.map(c => c.low));
+        highs.push({ price: absHigh, index: len - Math.floor(sliceSize / 2) });
+        lows.push({ price: absLow, index: len - sliceSize });
+    }
+
+    const allSwings = [];
+    highs.forEach(h => allSwings.push({ ...h, type: 'high' }));
+    lows.forEach(l => allSwings.push({ ...l, type: 'low' }));
+    allSwings.sort((a, b) => a.index - b.index);
+
+    if (allSwings.length < 2) return null;
+
+    const lastSwing = allSwings[allSwings.length - 1];
+    let prevSwing = null;
+    for (let i = allSwings.length - 2; i >= 0; i--) {
+        if (allSwings[i].type !== lastSwing.type) {
+            prevSwing = allSwings[i];
+            break;
+        }
+    }
+
+    if (!prevSwing) return null;
+
+    const isBullishImpulse = lastSwing.type === 'high' && prevSwing.type === 'low';
+    const highPrice = isBullishImpulse ? lastSwing.price : prevSwing.price;
+    const lowPrice = !isBullishImpulse ? lastSwing.price : prevSwing.price;
+    const range = highPrice - lowPrice;
+
+    if (range <= 0) return null;
+
+    let levels = {};
+    if (isBullishImpulse) {
+        levels = {
+            0: highPrice,
+            0.618: highPrice - (range * 0.618),
+            0.705: highPrice - (range * 0.705),
+            1: lowPrice
+        };
+    } else {
+        levels = {
+            0: lowPrice,
+            0.618: lowPrice + (range * 0.618),
+            0.705: lowPrice + (range * 0.705),
+            1: highPrice
+        };
+    }
+
+    let statusClass = "pending";
+    let statusText = "PRE-OTE ⚪";
+    
+    if (isBullishImpulse) {
+        if (currentPrice <= levels[0.618] && currentPrice >= levels[0.705]) {
+            statusClass = "tracking";
+            statusText = "BUY ZONE 🟢";
+        } else if (currentPrice > levels[0.618]) {
+            statusClass = "pending";
+            statusText = "PREMIUM ⚪";
+        } else if (currentPrice < levels[0.705]) {
+            statusClass = "swept";
+            statusText = "INVALIDATED 🔴";
+        }
+    } else {
+        if (currentPrice >= levels[0.618] && currentPrice <= levels[0.705]) {
+            statusClass = "swept";
+            statusText = "SELL ZONE 🔴";
+        } else if (currentPrice < levels[0.618]) {
+            statusClass = "pending";
+            statusText = "DISCOUNT ⚪";
+        } else if (currentPrice > levels[0.705]) {
+            statusClass = "swept";
+            statusText = "INVALIDATED 🔴";
+        }
+    }
+
+    return {
+        timeframeName,
+        isBullishImpulse,
+        levels,
+        currentPrice,
+        statusClass,
+        statusText,
+        range,
+        tp: levels[0],
+        sl: levels[1]
+    };
+}
+
+/**
+ * Generates and appends a gorgeous "Multi-Timeframe Fibonacci OTE" card grid panel directly into the DOM
+ * immediately following the "Institutional Liquidity Pools" section.
+ */
+function renderFibonacciOteUI(mtfData) {
+    let fibPanel = document.getElementById("fibonacciOtePanel");
+    if (!fibPanel) {
+        const poolsPanel = document.getElementById("liquidityPoolsPanel");
+        if (poolsPanel) {
+            fibPanel = document.createElement("section");
+            fibPanel.className = "panel";
+            fibPanel.id = "fibonacciOtePanel";
+            fibPanel.innerHTML = `
+                <div class="panel-head">
+                  <div>
+                    <p class="panel-kicker">ICT Optimal Trade Entry (OTE)</p>
+                    <h2>Multi-Timeframe Fibonacci OTE</h2>
+                  </div>
+                  <span id="fibonacciOteBadge" class="badge">ACTIVE</span>
+                </div>
+                <div class="liquidity-pools-grid" id="fibonacciOteGrid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:1rem; margin-top:1rem;">
+                    <p style="color:var(--muted);font-size:0.85rem;">Awaiting analysis to calculate Fibonacci OTE calls...</p>
+                </div>
+            `;
+            poolsPanel.parentNode.insertBefore(fibPanel, poolsPanel.nextSibling);
+        }
+    }
+
+    const grid = document.getElementById("fibonacciOteGrid");
+    if (!grid || !mtfData || !mtfData.data) return;
+
+    const timeframes = [
+        { id: "5min", name: "5 Minute (5M)" },
+        { id: "15min", name: "15 Minute (15M)" },
+        { id: "h1", name: "1 Hour (1H)" },
+        { id: "4h", name: "4 Hour (4H)" },
+        { id: "1day", name: "Daily (1D)" },
+        { id: "1week", name: "Weekly (1W)" },
+        { id: "1month", name: "Monthly (1M)" }
+    ];
+
+    let html = "";
+    
+    timeframes.forEach(tf => {
+        const candles = LiquidityEngine._getCandles(mtfData, tf.id);
+        if (!candles || candles.length === 0) return;
+        
+        const currentPrice = candles.at(-1).close;
+        const fib = calculateFibonacciOTE(candles, tf.name, currentPrice);
+        
+        if (!fib) return;
+
+        const impulseLabel = fib.isBullishImpulse ? "🟢 Bullish Impulse" : "🔴 Bearish Impulse";
+        
+        html += `
+            <div class="liquidity-tier-card" style="background: var(--surface); border: 1px solid rgba(255,255,255,0.05); padding: 1.2rem; border-radius: 8px;">
+                <div class="tier-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.8rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.5rem;">
+                    <span style="font-weight:600; font-size:0.95rem; color:var(--text);">${tf.name}</span>
+                    <span class="pool-status ${fib.statusClass}" style="padding: 2px 8px; border-radius: 4px; font-weight:700; font-size:0.75rem;">${fib.statusText}</span>
+                </div>
+                <div style="font-size:0.8rem; color:var(--muted); margin-bottom:0.8rem;">
+                    Type: <strong style="color:var(--text);">${impulseLabel}</strong>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.4rem; font-size:0.82rem;">
+                    <div style="display:flex; justify-content:space-between;">
+                        <span>Level 1.0 (Stop Loss)</span>
+                        <strong style="color:var(--text); font-family:monospace;">$${fib.sl.toFixed(2)}</strong>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span>Level 0.705 (OTE Bottom)</span>
+                        <strong style="color:var(--text); font-family:monospace;">$${fib.levels[0.705].toFixed(2)}</strong>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span>Level 0.618 (OTE Top)</span>
+                        <strong style="color:var(--text); font-family:monospace;">$${fib.levels[0.618].toFixed(2)}</strong>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span>Level 0.000 (Take Profit)</span>
+                        <strong style="color:var(--text); font-family:monospace;">$${fib.tp.toFixed(2)}</strong>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; margin-top:0.4rem; border-top:1px dashed rgba(255,255,255,0.1); padding-top:0.4rem;">
+                        <span>Current Price</span>
+                        <strong style="color:var(--text); font-family:monospace;">$${fib.currentPrice.toFixed(2)}</strong>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    grid.innerHTML = html || \`<p style="color:var(--muted);font-size:0.85rem;">No Fibonacci retracement data could be calculated.</p>\`;
 }
