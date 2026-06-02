@@ -679,17 +679,20 @@ async function loadClosedTrades(env) {
 async function fetchMtfPayload(env, options = {}) {
   const instrument = normalizeInstrument(options.instrument || DEFAULT_INSTRUMENT);
   const entryTf = String(options.entryTf || "15min");
-  const outputsize = clampInt(options.outputsize, 200, 30, 2000);
+  
+  // BUG FIX: Increase default saved candles to 1,000 (clamped up to 2,500)
+  const outputsize = clampInt(options.outputsize, 1000, 30, 2500);
 
-  // Fetch all timeframes in parallel using the KV edge cache
+  // Fetch all timeframes in parallel using the KV edge cache (now storing 1,000 candles!)
   const [m5Payload, m15Payload, h1Payload, h4Payload, dailyPayload, weeklyPayload, monthlyPayload] = await Promise.all([
     fetchCandlesWithCache(env, { instrument, timeframe: "5min", count: outputsize }),
     fetchCandlesWithCache(env, { instrument, timeframe: "15min", count: outputsize }),
     fetchCandlesWithCache(env, { instrument, timeframe: "1h", count: outputsize }),
     fetchCandlesWithCache(env, { instrument, timeframe: "4h", count: outputsize }),
     fetchCandlesWithCache(env, { instrument, timeframe: "1day", count: outputsize }),
-    fetchCandlesWithCache(env, { instrument, timeframe: "1week", count: Math.min(outputsize, 500) }),
-    fetchCandlesWithCache(env, { instrument, timeframe: "1month", count: Math.min(outputsize, 240) }),
+    // Weekly and Monthly are naturally shorter timeframes, so we clamp them safely:
+    fetchCandlesWithCache(env, { instrument, timeframe: "1week", count: Math.min(outputsize, 1000) }),
+    fetchCandlesWithCache(env, { instrument, timeframe: "1month", count: Math.min(outputsize, 500) }),
   ]);
 
   // Determine aggregate cache status for the X-Cache header

@@ -919,6 +919,25 @@ const LiquidityEngine = {
 
             // Close is ABOVE the level
             if (close > level) {
+                // BUG FIX: Wick Rejection Filter
+                // If the upper wick is more than 35% of the total range, it is an institutional stop hunt, not a breakout!
+                const upperWick = high - Math.max(open, close);
+                const isRejected = totalRange > 0 && (upperWick / totalRange) > 0.35;
+
+                if (isRejected) {
+                    return {
+                        type: "PENDING",
+                        displayName: `${pool.name} Touch Pending`,
+                        emoji: "⚠️",
+                        price: level,
+                        childClose: close,
+                        childDetail: `Closed $${closeAbove.toFixed(2)} above, but upper wick rejection is too large (${((upperWick / totalRange) * 100).toFixed(0)}%)`,
+                        bias: "PENDING — Wait for confirmation",
+                        biasDirection: "pending",
+                        strength: "Weak"
+                    };
+                }
+
                 // RULE B — BREAKOUT: strong close with momentum
                 if (closeAbove >= (minBreakDepth * 0.5) && bodyRatio >= 0.40) {
                     const hasFVG = this._checkFVGFormed(childCandles, childCandle);
@@ -992,14 +1011,14 @@ const LiquidityEngine = {
                 };
             }
             // MULTI-CANDLE SWEEP: previous candle closed below, current candle engulfs and closes above
-            else if (priorCandle && priorCandle.close < level && close >= level && low < level) {
+            else if (priorCandle && priorCandle.close < level && close >= level && high > level) {
                 return {
                     type: "SWEEP",
                     displayName: `${pool.name} Multi-Candle Sweep`,
                     emoji: "🩸",
                     price: level,
                     childClose: close,
-                    childDetail: `Engulfed back above $${level.toFixed(2)} | Body ${(bodyRatio * 100).toFixed(0)}%`,
+                    childDetail: `Engulfed back below $${level.toFixed(2)} | Body ${(bodyRatio * 100).toFixed(0)}%`,
                     bias: "REVERSAL EXPECTED ↑",
                     biasDirection: "reversal",
                     strength: "Strong"
@@ -1008,6 +1027,25 @@ const LiquidityEngine = {
 
             // Close is BELOW the level
             if (close < level) {
+                // BUG FIX: Wick Rejection Filter
+                // If the lower wick is more than 35% of the total range, it is an institutional stop hunt, not a breakout!
+                const lowerWick = Math.min(open, close) - low;
+                const isRejected = totalRange > 0 && (lowerWick / totalRange) > 0.35;
+
+                if (isRejected) {
+                    return {
+                        type: "PENDING",
+                        displayName: `${pool.name} Touch Pending`,
+                        emoji: "⚠️",
+                        price: level,
+                        childClose: close,
+                        childDetail: `Closed $${closeBelow.toFixed(2)} below, but lower wick rejection is too large (${((lowerWick / totalRange) * 100).toFixed(0)}%)`,
+                        bias: "PENDING — Wait for confirmation",
+                        biasDirection: "pending",
+                        strength: "Weak"
+                    };
+                }
+
                 // RULE B — BREAKOUT: strong close with momentum
                 if (closeBelow >= (minBreakDepth * 0.5) && bodyRatio >= 0.40) {
                     const hasFVG = this._checkFVGFormed(childCandles, childCandle);
