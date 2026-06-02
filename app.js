@@ -4017,6 +4017,5 @@ function renderFibonacciOteUI(mtfData) {
             </div>
         `;
     });
-
-    grid.innerHTML = html || \`<p style="color:var(--muted);font-size:0.85rem;">No Fibonacci retracement data could be calculated.</p>\`;
+    grid.innerHTML = html || `<p style="color:var(--muted);font-size:0.85rem;">No Fibonacci retracement data could be calculated.</p>`;
 }
