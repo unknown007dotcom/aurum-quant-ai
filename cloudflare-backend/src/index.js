@@ -61,45 +61,109 @@ function inflateCandles(flatCandles) {
 async function fetchCandlesWithCache(env, options = {}) {
   const instrument = normalizeInstrument(options.instrument || DEFAULT_INSTRUMENT);
   const timeframe = String(options.timeframe || "15min");
-  const count = clampInt(options.count, 200, 30, 2000);
-  const cacheKey = `candles:${instrument}:${timeframe}:${count}`;
+  const count = clampInt(options.count, 1000, 30, 2500);
+  
+  // Use a master cache key without the requested count, so we build a single growing dataset per timeframe
+  const cacheKey = `candles:${instrument}:${timeframe}:master`;
 
-  // 1. Attempt to read from the Cloudflare KV Edge Cache
-  let cachedData = null;
+  // 1. Attempt to read existing history from the Cloudflare KV Edge Cache
+  let cachedCandles = [];
+  let cacheHit = false;
   try {
     if (env.CANDLE_CACHE) {
-      cachedData = await env.CANDLE_CACHE.get(cacheKey);
+      const cachedData = await env.CANDLE_CACHE.get(cacheKey);
+      if (cachedData) {
+        const flatArray = JSON.parse(cachedData);
+        cachedCandles = inflateCandles(flatArray);
+        if (cachedCandles.length > 0) {
+          cacheHit = true;
+        }
+      }
     }
   } catch (err) {
-    console.error("KV read error (bypassing to live):", err);
+    console.error("KV read error:", err);
   }
 
-  if (cachedData) {
-    // Cache Hit → inflate compressed data and return immediately
-    try {
-      const flatArray = JSON.parse(cachedData);
-      const inflated = inflateCandles(flatArray);
-      if (inflated.length > 0) {
-        return { source: "KV_CACHE", candles: inflated };
-      }
-    } catch (parseErr) {
-      console.error("KV parse error (bypassing to live):", parseErr);
+  // Define timeframe freshness threshold in milliseconds
+  const timeframeMs = {
+    "1min": 1 * 60 * 1000,
+    "5min": 5 * 60 * 1000,
+    "15min": 15 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+    "4h": 4 * 60 * 60 * 1000,
+    "1day": 24 * 60 * 60 * 1000,
+    "1week": 7 * 24 * 60 * 60 * 1000,
+    "1month": 30 * 24 * 60 * 60 * 1000
+  };
+  const duration = timeframeMs[timeframe] || (15 * 60 * 1000);
+
+  // Check if cache is fresh enough.
+  // Cache is fresh if the latest candle's timestamp is within the timeframe duration.
+  let isFresh = false;
+  if (cacheHit && cachedCandles.length > 0) {
+    const lastCandle = cachedCandles.at(-1);
+    const lastTime = new Date(lastCandle.datetime).getTime();
+    if (Date.now() - lastTime < duration) {
+      isFresh = true;
     }
   }
 
-  // 2. Cache Miss → Fetch fresh data from OANDA
+  // If the cache is fresh, return the uncut dataset directly! (Extremely fast Cache Hit!)
+  if (isFresh) {
+    return {
+      source: "KV_CACHE",
+      candles: cachedCandles
+    };
+  }
+
+  // 2. Cache is stale or missing -> Fetch fresh rolling window from OANDA
+  // To grow the history, we always request the fresh rolling window (the count requested, up to 2500)
   const freshCandles = await fetchCandles(env, { instrument, timeframe, count });
 
-  // 3. Compress and save to KV with 2-hour TTL (fire-and-forget, never block the response)
-  if (Array.isArray(freshCandles) && freshCandles.length > 0 && env.CANDLE_CACHE) {
-    try {
-      const compressed = compressCandles(freshCandles);
-      await env.CANDLE_CACHE.put(cacheKey, JSON.stringify(compressed), {
-        expirationTtl: CACHE_TTL_SECONDS
-      });
-    } catch (err) {
-      console.error("KV write error:", err);
+  if (Array.isArray(freshCandles) && freshCandles.length > 0) {
+    // 3. Merge new candles into the permanent cached history (avoiding duplicate datetimes)
+    const mergedMap = new Map();
+    
+    // Add existing history first
+    cachedCandles.forEach(c => {
+      if (c.datetime) mergedMap.set(c.datetime, c);
+    });
+    
+    // Add/overwrite with fresh candles (so any incomplete candles get updated!)
+    freshCandles.forEach(c => {
+      if (c.datetime) mergedMap.set(c.datetime, c);
+    });
+
+    // Convert back to array, sort chronologically ascending
+    let mergedList = Array.from(mergedMap.values()).sort((a, b) => a.datetime.localeCompare(b.datetime));
+
+    // Cap the permanent history database to a very generous 5,000 candles to keep performance optimal
+    if (mergedList.length > 5000) {
+      mergedList = mergedList.slice(-5000);
     }
+
+    // 4. Save the expanded history back to KV PERMANENTLY (No expiration TTL! Never deleted!)
+    if (env.CANDLE_CACHE) {
+      try {
+        const compressed = compressCandles(mergedList);
+        await env.CANDLE_CACHE.put(cacheKey, JSON.stringify(compressed));
+      } catch (err) {
+        console.error("KV write error:", err);
+      }
+    }
+
+    return {
+      source: "OANDA_LIVE_MERGED",
+      candles: mergedList
+    };
+  }
+
+  // Fallback to whatever is cached if OANDA fetch failed
+  if (cachedCandles.length > 0) {
+    return {
+      source: "KV_CACHE_FALLBACK",
+      candles: cachedCandles
+    };
   }
 
   return { source: "OANDA_LIVE", candles: freshCandles };
@@ -150,7 +214,7 @@ export default {
 async function handleMarketMtfResponse(url, env, request) {
   const symbol = normalizeInstrument(url.searchParams.get("symbol") || DEFAULT_INSTRUMENT);
   const entryTf = String(url.searchParams.get("entryTf") || "15min");
-  const outputsize = clampInt(url.searchParams.get("outputsize"), 200, 30, 2000);
+  const outputsize = clampInt(url.searchParams.get("outputsize"), 1000, 30, 2500);
   const payload = await fetchMtfPayload(env, { instrument: symbol, entryTf, outputsize });
   const cacheStatus = payload.cache_status || "MISS";
   return new Response(JSON.stringify(payload), {
@@ -575,7 +639,7 @@ async function runBotTick(env, options = {}) {
   };
 
   const [mtfData, latestPrice, openTrades] = await Promise.all([
-    fetchMtfPayload(env, { instrument, entryTf: "15min", outputsize: 200 }),
+    fetchMtfPayload(env, { instrument, entryTf: "15min", outputsize: 1000 }),
     fetchPrice(env, { instrument }),
     listOpenTrades(env, { instrument }).catch(() => []),
   ]);

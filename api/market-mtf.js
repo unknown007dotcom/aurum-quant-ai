@@ -5,7 +5,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed." });
 
   const entryTf = req.query.entryTf || "15min";
-  const outputsize = req.query.outputsize || "200";
+  const outputsize = req.query.outputsize || "1000";
   const userApiKey = req.query.apikey || "";
   const symbol = req.query.symbol ? String(req.query.symbol) : "";
 

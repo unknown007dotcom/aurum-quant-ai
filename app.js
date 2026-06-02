@@ -29,7 +29,7 @@ let state = {
   trueGoldPrice: 2350.00,
   selectedTimeframe: "15min",
   selectedTimezone: "Asia/Kolkata",
-  candleCount: 180,
+  candleCount: 1000,
   temperature: 0.2,
   theme: "dark",
   isRunning: false,
@@ -1469,7 +1469,7 @@ async function runAnalysis() {
         // --- Step 1: Fetch market data ---
         let res, mtfData;
         try {
-            res = await fetch(apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}`));
+            res = await fetch(apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`));
             mtfData = await res.json().catch(() => ({}));
         } catch (fetchErr) {
             showAnalysisError(
@@ -2654,7 +2654,7 @@ async function runLiquidityScanSilent() {
     if (state.isRunning) return; // Skip if main analysis is busy
     try {
         const symbol = encodeURIComponent(state.botInstrument || "XAU_USD");
-        const res = await fetch(apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}`));
+        const res = await fetch(apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`));
         const mtfData = await res.json().catch(() => ({}));
         
         if (!res.ok || !mtfData?.data || !Array.isArray(mtfData.data)) return;
