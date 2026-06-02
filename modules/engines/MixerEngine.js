@@ -1,6 +1,7 @@
 import { SweepEngine } from './SweepEngine.js';
 import { FVGEngine } from './FVGEngine.js';
 import { TrendEngine } from './TrendEngine.js';
+import { FibonacciEngine } from './FibonacciEngine.js';
 import { detectSwings } from '../analysis.js'; // We'll keep some generic utils in analysis.js for now or move them later
 import { RMI } from '../../lib/rmi.js';
 import { detectAmdPhase, toGmtHour } from '../utils.js';
@@ -55,6 +56,7 @@ export class MixerEngine {
         const fvgs = FVGEngine.detect(entryCandles);
         const trendData = TrendEngine.detect(entryCandles, htfCandles);
         const liquidity = SweepEngine.detect(entryCandles, swings, htfCandles, currentAtr);
+        const fibonacci = FibonacciEngine.detect(swings, latest.close);
         
         const structureMeta = this.detectStructureEvents(entryCandles, swings);
         const orderBlocks = this.detectOrderBlocks(entryCandles, fvgs, structureMeta.events, liquidity, currentAtr);
@@ -71,6 +73,7 @@ export class MixerEngine {
             swings,
             fvgs,
             orderBlocks,
+            fibonacci,
             structure: structureMeta.events,
             structureMeta: structureMeta.meta,
             liquidity,
@@ -196,6 +199,12 @@ export class MixerEngine {
             }
         }
 
+        // Fibonacci Confluence
+        if (analysis.fibonacci && analysis.fibonacci.inEntryZone) {
+            direction = analysis.fibonacci.action;
+            confidence += 30; // Strong signal when in golden zone
+        }
+
         // HTF Confluence
         if (analysis.htfAlignment?.bias === "bullish" && direction === "Buy") confidence += 15;
         if (analysis.htfAlignment?.bias === "bearish" && direction === "Sell") confidence += 15;
@@ -209,6 +218,25 @@ export class MixerEngine {
         const biasSign = direction === "Buy" ? 1 : -1;
         const price = analysis.price;
         const stopDist = analysis.atr14 || 0.8;
+
+        let tp1 = price + (stopDist * 1.5 * biasSign);
+        let tp2 = price + (stopDist * 3 * biasSign);
+        let tp3 = price + (stopDist * 5 * biasSign);
+        let stopPrice = price - (stopDist * 1.2 * biasSign);
+
+        const tradePlan = [
+            `Primary bias: ${direction} with ${confidence}% confidence.`,
+            `Wait for retest of nearest ${direction === "Buy" ? "bullish" : "bearish"} zone.`,
+            analysis.liquidity?.sweep ? `Liquidity swept at ${analysis.liquidity.sweep.price}, targeting reversal.` : "Target liquidity pools (PDH/PDL)."
+        ];
+
+        if (analysis.fibonacci && analysis.fibonacci.inEntryZone) {
+            tp1 = analysis.fibonacci.tp;
+            tp2 = analysis.fibonacci.tp;
+            tp3 = analysis.fibonacci.tp;
+            stopPrice = analysis.fibonacci.sl;
+            tradePlan.push(`Fibonacci Golden Zone active. Entry between 0.618 and 0.705. Target 0 at ${tp1.toFixed(2)}. SL 1 at ${stopPrice.toFixed(2)}.`);
+        }
 
         return {
             action: direction,
@@ -226,15 +254,11 @@ export class MixerEngine {
                 smaAligned: true,
                 pdAligned: true
             },
-            tradePlan: [
-                `Primary bias: ${direction} with ${confidence}% confidence.`,
-                `Wait for retest of nearest ${direction === "Buy" ? "bullish" : "bearish"} zone.`,
-                analysis.liquidity?.sweep ? `Liquidity swept at ${analysis.liquidity.sweep.price}, targeting reversal.` : "Target liquidity pools (PDH/PDL)."
-            ],
-            tp1: price + (stopDist * 1.5 * biasSign),
-            tp2: price + (stopDist * 3 * biasSign),
-            tp3: price + (stopDist * 5 * biasSign),
-            stopPrice: price - (stopDist * 1.2 * biasSign)
+            tradePlan: tradePlan,
+            tp1: tp1,
+            tp2: tp2,
+            tp3: tp3,
+            stopPrice: stopPrice
         };
     }
 }

@@ -19,6 +19,12 @@ module.exports = async function handler(req, res) {
       res.setHeader("Cache-Control", "no-store");
       
       if (isAdmin) {
+        if (!String(settings.oandaApiToken || "").trim() && process.env.OANDA_API_TOKEN) {
+          settings.oandaApiToken = process.env.OANDA_API_TOKEN;
+        }
+        if (!String(settings.oandaAccountId || "").trim() && process.env.OANDA_ACCOUNT_ID) {
+          settings.oandaAccountId = process.env.OANDA_ACCOUNT_ID;
+        }
         return res.status(200).json({ isAdmin: true, settings });
       } else {
         return res.status(200).json({ isAdmin: false, settings: sanitizePublicSettings(settings) });

@@ -302,6 +302,14 @@ async function handleSettings(request, env) {
     if (action === "metrics") {
       return { metrics: computeMetrics(await loadHistoryEntries(env)) };
     }
+    if (isAdmin) {
+      if (!String(settings.oandaApiToken || "").trim() && env.OANDA_API_TOKEN) {
+        settings.oandaApiToken = env.OANDA_API_TOKEN;
+      }
+      if (!String(settings.oandaAccountId || "").trim() && env.OANDA_ACCOUNT_ID) {
+        settings.oandaAccountId = env.OANDA_ACCOUNT_ID;
+      }
+    }
     return { settings: isAdmin ? settings : sanitizePublicSettings(settings), isAdmin };
   }
 

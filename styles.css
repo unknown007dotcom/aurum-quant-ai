@@ -140,9 +140,6 @@ body::before {
   z-index: 1;
 }
 
-.auth-only {
-  display: none;
-}
 
 .hero-copy {
   max-width: 900px;

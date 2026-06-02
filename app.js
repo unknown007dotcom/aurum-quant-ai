@@ -1552,7 +1552,7 @@ async function runAnalysis() {
 
         let aiRes, aiData;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        const timeoutId = setTimeout(() => controller.abort(), 90000);
         try {
             aiRes = await fetch(apiUrl(APP_CONFIG.aiChatPath), {
                 method: "POST",
@@ -1679,6 +1679,7 @@ function renderMarketUI(a) {
     dom.fillList("#structureList", a.structureEvents || ["Awaiting chart analysis."]);
     dom.fillList("#reversalList", a.reversalZones || ["Awaiting chart analysis."]);
     dom.fillList("#liquidityList", a.liquidity || ["Awaiting chart analysis."]);
+    dom.fillList("#fibList", a.fibonacci?.displayList || ["Awaiting chart analysis."]);
     dom.fillList("#scenarioList", a.scenarios || ["Awaiting chart analysis."]);
     dom.fillList("#htfList", a.htfAlignment || ["Awaiting chart analysis."]);
     
@@ -2508,6 +2509,7 @@ function primeHomeScreen() {
     dom.fillList("#structureList", ["Awaiting chart analysis."]);
     dom.fillList("#reversalList", ["Awaiting chart analysis."]);
     dom.fillList("#liquidityList", ["Awaiting chart analysis."]);
+    dom.fillList("#fibList", ["Awaiting chart analysis."]);
     dom.fillList("#scenarioList", ["Awaiting chart analysis."]);
     dom.fillList("#htfList", ["Awaiting chart analysis."]);
     dom.fillList("#openTradesList", ["Loading OANDA trade exposure..."]);
@@ -2822,7 +2824,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 if (pass === BASIC_SETTINGS_PASSWORD) {
                     state.settingsRole = "basic";
                     document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
-                    document.querySelectorAll(".auth-only").forEach(el => el.style.display = "none");
+                    document.querySelectorAll(".auth-only").forEach(el => el.style.display = "");
                 } else {
                     state.settingsRole = "admin";
                     document.querySelectorAll(".admin-only").forEach(el => el.style.display = "");

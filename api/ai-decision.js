@@ -139,7 +139,7 @@ module.exports = async function handler(req, res) {
     debatePool.map(async (entry, index) => {
       // Apply a staggered start (1.5s delay per model) to avoid provider rate limits (429s)
       if (index > 0) {
-        await new Promise((resolve) => setTimeout(resolve, index * 1500));
+        await new Promise((resolve) => setTimeout(resolve, index * 500));
       }
       return requestAiModel({
         modelConfig: entry.modelConfig,
@@ -366,12 +366,48 @@ function buildDebatePool(debateModels, selectedSummary) {
       (model) =>
         model.id &&
         model.apiKey &&
+        isChatCapableModel(model.id) &&
         (model.isDebateParticipant || model.key !== selectedSummary.key),
     ),
   );
 
   const capped = shuffleAndCap(leftover.filter((model) => model.id && model.apiKey), MAX_DEBATE_MODELS);
   return assignDebateBiasTeams(capped);
+}
+
+function isChatCapableModel(modelId) {
+  const id = String(modelId || "").toLowerCase();
+  // Reject known non-chat model categories
+  const nonChatPatterns = [
+    /\bembed/,          // embedding models (nv-embed, embed-qa, embedcode, etc.)
+    /\brerank/,         // reranking models
+    /\bsafety/,         // safety classifiers (content-safety, safety-guard)
+    /\bguard/,          // guard models (llama-guard, nemoguard)
+    /\bclip\b/,         // CLIP models
+    /\bdeplot\b/,       // chart-to-table models
+    /\bparse\b/,        // document parsing models
+    /\bretriever/,      // retrieval models
+    /\breward\b/,       // reward models
+    /\bcalibration/,    // calibration models
+    /\bpii\b/,          // PII detection models
+    /\bvideo-detector/,   // video analysis models
+    /\bkosmos/,         // multimodal non-chat models
+    /\bneva\b/,         // vision-only models
+    /\bvila\b/,         // vision-language (non-chat)
+    /\btranslate/,      // translation models
+    /\bfuyu\b/,         // vision-only models
+    /\bbge-/,           // BGE embedding models
+    /\barctic-embed/,   // Snowflake embedding
+    /\brecurrentgemma/,  // non-instruct base models
+    /\bgemma-2b$/,      // base model without instruct
+    /\bstarcoder/,      // code completion only
+    /\bcodellama/,      // code completion only (no chat)
+    /\bcodegemma/,      // code completion only
+    /\bomni.*reasoning/, // multimodal reasoning (non-standard chat)
+    /\bmultimodal/,     // multimodal (non-standard chat)
+    /\bvision/,         // vision models need image input
+  ];
+  return !nonChatPatterns.some((pattern) => pattern.test(id));
 }
 
 function shuffleAndCap(models, max) {
