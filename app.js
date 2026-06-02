@@ -4,6 +4,14 @@
  * Stateful SMC/ICT + RMI + Arbiter Council
  */
 
+// --- Dynamic Imports ---
+let FibonacciEngine = null;
+import("./modules/engines/FibonacciEngine.js").then(mod => {
+    FibonacciEngine = mod.FibonacciEngine;
+}).catch(err => {
+    console.error("Failed to load FibonacciEngine module", err);
+});
+
 // --- Constants & Config ---
 const STORAGE_KEY = "xauusd-analyzer-settings-v1";
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
@@ -3844,99 +3852,38 @@ function showTrackerModal(stepName) {
  * Generates clear Buy/Sell/Wait calls based on the OTE Golden Pocket.
  */
 function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
-    if (!candles || candles.length < 10) {
+    if (!candles || candles.length < 10 || !FibonacciEngine) {
         return null;
     }
 
     const len = candles.length;
-    const N = 2; // Standard N=2 (5-bar fractal) for SMC/ICT swing detection
+    const N = 2; // Standard N=2 (5-bar fractal)
+    const swings = { highs: [], lows: [] };
 
-    // Find all local swing highs and lows across the entire history (stored in Cloudflare KV)
-    // We skip the first N=2 candles and the last 3 candles to ensure confirmation.
-    const highs = [];
-    const lows = [];
-
+    // Find local swings with strict inequality to allow equal-bar swings
     for (let i = N; i < len - 3; i++) {
         let isHigh = true;
         let isLow = true;
         for (let j = 1; j <= N; j++) {
-            if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+            if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) {
                 isHigh = false;
             }
-            if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+            if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) {
                 isLow = false;
             }
         }
-        if (isHigh) highs.push({ price: candles[i].high, index: i });
-        if (isLow) lows.push({ price: candles[i].low, index: i });
+        if (isHigh) swings.highs.push({ price: candles[i].high, index: i });
+        if (isLow) swings.lows.push({ price: candles[i].low, index: i });
     }
 
-    // Merge and sort swings chronologically
-    const allSwings = [];
-    highs.forEach(h => allSwings.push({ ...h, type: 'high' }));
-    lows.forEach(l => allSwings.push({ ...l, type: 'low' }));
-    allSwings.sort((a, b) => a.index - b.index);
-
-    if (allSwings.length < 2) return null;
-
-    // ZigZag cleanup: filter out consecutive same-direction pivots
-    // (keep highest high for consecutive highs, lowest low for consecutive lows)
-    const cleanedSwings = [];
-    for (const swing of allSwings) {
-        if (cleanedSwings.length === 0) {
-            cleanedSwings.push(swing);
-            continue;
-        }
-        const last = cleanedSwings[cleanedSwings.length - 1];
-        if (last.type === swing.type) {
-            if (swing.type === 'high') {
-                if (swing.price > last.price) {
-                    cleanedSwings[cleanedSwings.length - 1] = swing;
-                }
-            } else {
-                if (swing.price < last.price) {
-                    cleanedSwings[cleanedSwings.length - 1] = swing;
-                }
-            }
-        } else {
-            cleanedSwings.push(swing);
-        }
-    }
-
-    if (cleanedSwings.length < 2) return null;
-
-    // Identify the most recent completed alternating swing leg
-    const prevSwing = cleanedSwings[cleanedSwings.length - 2];
-    const lastSwing = cleanedSwings[cleanedSwings.length - 1];
-
-    const isBullishImpulse = lastSwing.type === 'high' && prevSwing.type === 'low';
-    const highPrice = isBullishImpulse ? lastSwing.price : prevSwing.price;
-    const lowPrice = !isBullishImpulse ? lastSwing.price : prevSwing.price;
-    const range = highPrice - lowPrice;
-
-    if (range <= 0) return null;
-
-    // Calculate standard Fibonacci OTE levels
-    let levels = {};
-    if (isBullishImpulse) {
-        levels = {
-            0: highPrice,
-            0.618: highPrice - (range * 0.618),
-            0.705: highPrice - (range * 0.705),
-            1: lowPrice
-        };
-    } else {
-        levels = {
-            0: lowPrice,
-            0.618: lowPrice + (range * 0.618),
-            0.705: lowPrice + (range * 0.705),
-            1: highPrice
-        };
-    }
+    const engineResult = FibonacciEngine.detect(swings, currentPrice);
+    if (!engineResult) return null;
 
     let statusClass = "pending";
     let statusText = "PRE-OTE ⚪";
-    
+    const levels = engineResult.levels;
+    const isBullishImpulse = engineResult.isBullishImpulse;
+
     if (isBullishImpulse) {
         if (currentPrice <= levels[0.618] && currentPrice >= levels[0.705]) {
             statusClass = "tracking";
@@ -3968,9 +3915,9 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
         currentPrice,
         statusClass,
         statusText,
-        range,
-        tp: levels[0],
-        sl: levels[1]
+        range: levels[0] - levels[1],
+        tp: engineResult.tp,
+        sl: engineResult.sl
     };
 }
 
@@ -4025,7 +3972,20 @@ function renderFibonacciOteUI(mtfData) {
         const currentPrice = candles.at(-1).close;
         const fib = calculateFibonacciOTE(candles, tf.name, currentPrice);
         
-        if (!fib) return;
+        if (!fib) {
+            html += `
+                <div class="liquidity-tier-card error-card" style="background: var(--surface); border: 1px solid rgba(239, 68, 68, 0.2); padding: 1.2rem; border-radius: 8px; opacity: 0.7;">
+                    <div class="tier-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.8rem; border-bottom: 1px solid rgba(239,68,68,0.1); padding-bottom: 0.5rem;">
+                        <span style="font-weight:600; font-size:0.95rem; color:var(--text);">${tf.name}</span>
+                        <span class="pool-status swept" style="padding: 2px 8px; border-radius: 4px; font-weight:700; font-size:0.75rem;">NO VALID LEG</span>
+                    </div>
+                    <div style="font-size:0.8rem; color:var(--muted); text-align:center; padding: 1rem 0;">
+                        No valid Fibonacci OTE swing leg detected.
+                    </div>
+                </div>
+            `;
+            return;
+        }
 
         const impulseLabel = fib.isBullishImpulse ? "🟢 Bullish Impulse" : "🔴 Bearish Impulse";
         

@@ -124,18 +124,28 @@ async function fetchCandlesWithCache(env, options = {}) {
     // 3. Merge new candles into the permanent cached history (avoiding duplicate datetimes)
     const mergedMap = new Map();
     
-    // Add existing history first
+    // Add existing history first, normalizing to Unix timestamp (seconds) as key
     cachedCandles.forEach(c => {
-      if (c.datetime) mergedMap.set(c.datetime, c);
+      if (c.datetime) {
+        const ts = Math.floor(new Date(c.datetime).getTime() / 1000);
+        if (Number.isFinite(ts)) {
+          mergedMap.set(ts, { ...c, datetime: new Date(ts * 1000).toISOString() });
+        }
+      }
     });
     
     // Add/overwrite with fresh candles (so any incomplete candles get updated!)
     freshCandles.forEach(c => {
-      if (c.datetime) mergedMap.set(c.datetime, c);
+      if (c.datetime) {
+        const ts = Math.floor(new Date(c.datetime).getTime() / 1000);
+        if (Number.isFinite(ts)) {
+          mergedMap.set(ts, { ...c, datetime: new Date(ts * 1000).toISOString() });
+        }
+      }
     });
 
-    // Convert back to array, sort chronologically ascending
-    let mergedList = Array.from(mergedMap.values()).sort((a, b) => a.datetime.localeCompare(b.datetime));
+    // Convert back to array, sort chronologically ascending using Date objects
+    let mergedList = Array.from(mergedMap.values()).sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
 
     // Cap the permanent history database to a very generous 5,000 candles to keep performance optimal
     if (mergedList.length > 5000) {
