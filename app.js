@@ -91,11 +91,7 @@ let state = {
 
 function apiUrl(path) {
   const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${String(path || "")}`;
-  if (cleanPath.startsWith("/settings") || cleanPath.startsWith("/ai-decision") || cleanPath.startsWith("/auto-learn")) {
-    return `/api${cleanPath}`;
-  }
-  const cleanBase = String(EDGE_API_BASE || "").replace(/\/+$/, "");
-  return `${cleanBase}${cleanPath}`;
+  return `/api${cleanPath}`;
 }
 
 const TIMEFRAME_TO_TRADINGVIEW = {
@@ -1666,6 +1662,7 @@ async function runAnalysis() {
 
         state.lastAnalysisData = analysis;
         renderMarketUI(analysis);
+        state.lastMtfData = mtfData;   // <--- INJECT THIS LINE!
         renderFibonacciOteUI(mtfData);
 
         // --- Step 2: Consult AI arbiter ---
@@ -2849,6 +2846,7 @@ async function runLiquidityScanSilent() {
         state.lastAnalysisData.sessionLevels = LiquidityEngine._sessionState;
         
         renderLiquidityPoolsUI(liquidityPools, liquidityEvents);
+        state.lastMtfData = mtfData;   // <--- INJECT THIS LINE!
         renderFibonacciOteUI(mtfData);
         renderLiquidityEventBox(liquidityEvents);
         fireAllLiquidityNotifications(liquidityEvents);
@@ -3845,45 +3843,108 @@ function showTrackerModal(stepName) {
   modal.setAttribute("aria-hidden", "false");
 }
 
-// --- ICT Optimal Trade Entry (OTE) Fibonacci Calculations ---
+// --- ICT Optimal Trade Entry (OTE) Fibonacci & Swing Deep-Dive Module ---
 
-/**
- * Automatically computes swing highs/lows and maps standard 0, 0.618, 0.705, 1.0 Fibonacci levels.
- * Generates clear Buy/Sell/Wait calls based on the OTE Golden Pocket.
- */
 function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
-    if (!candles || candles.length < 10 || !FibonacciEngine) {
+    if (!candles || candles.length < 15) {
         return null;
     }
 
+    // Find all local swings of depth 4
+    const highs = [];
+    const lows = [];
     const len = candles.length;
-    const N = 2; // Standard N=2 (5-bar fractal)
-    const swings = { highs: [], lows: [] };
-
-    // Find local swings with strict inequality to allow equal-bar swings
-    for (let i = N; i < len - 3; i++) {
+    const k = 4;
+    
+    for (let i = k; i < len - k; i++) {
         let isHigh = true;
         let isLow = true;
-        for (let j = 1; j <= N; j++) {
-            if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) {
+        for (let j = 1; j <= k; j++) {
+            if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
                 isHigh = false;
             }
-            if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) {
+            if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
                 isLow = false;
             }
         }
-        if (isHigh) swings.highs.push({ price: candles[i].high, index: i });
-        if (isLow) swings.lows.push({ price: candles[i].low, index: i });
+        if (isHigh) highs.push({ price: candles[i].high, index: i });
+        if (isLow) lows.push({ price: candles[i].low, index: i });
     }
 
-    const engineResult = FibonacciEngine.detect(swings, currentPrice);
-    if (!engineResult) return null;
+    // Fallback search with smaller depth
+    if (highs.length === 0 || lows.length === 0) {
+        const k2 = 2;
+        for (let i = k2; i < len - k2; i++) {
+            let isHigh = true;
+            let isLow = true;
+            for (let j = 1; j <= k2; j++) {
+                if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+                    isHigh = false;
+                }
+                if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+                    isLow = false;
+                }
+            }
+            if (isHigh) highs.push({ price: candles[i].high, index: i });
+            if (isLow) lows.push({ price: candles[i].low, index: i });
+        }
+    }
+
+    // Secondary fallback using absolute limits of the last 40 candles
+    if (highs.length === 0 || lows.length === 0) {
+        const sliceSize = Math.min(40, len);
+        const recentCandles = candles.slice(-sliceSize);
+        const absHigh = Math.max(...recentCandles.map(c => c.high));
+        const absLow = Math.min(...recentCandles.map(c => c.low));
+        highs.push({ price: absHigh, index: len - Math.floor(sliceSize / 2) });
+        lows.push({ price: absLow, index: len - sliceSize });
+    }
+
+    const allSwings = [];
+    highs.forEach(h => allSwings.push({ ...h, type: 'high' }));
+    lows.forEach(l => allSwings.push({ ...l, type: 'low' }));
+    allSwings.sort((a, b) => a.index - b.index);
+
+    if (allSwings.length < 2) return null;
+
+    const lastSwing = allSwings[allSwings.length - 1];
+    let prevSwing = null;
+    for (let i = allSwings.length - 2; i >= 0; i--) {
+        if (allSwings[i].type !== lastSwing.type) {
+            prevSwing = allSwings[i];
+            break;
+        }
+    }
+
+    if (!prevSwing) return null;
+
+    const isBullishImpulse = lastSwing.type === 'high' && prevSwing.type === 'low';
+    const highPrice = isBullishImpulse ? lastSwing.price : prevSwing.price;
+    const lowPrice = !isBullishImpulse ? lastSwing.price : prevSwing.price;
+    const range = highPrice - lowPrice;
+
+    if (range <= 0) return null;
+
+    let levels = {};
+    if (isBullishImpulse) {
+        levels = {
+            0: highPrice,
+            0.618: highPrice - (range * 0.618),
+            0.705: highPrice - (range * 0.705),
+            1: lowPrice
+        };
+    } else {
+        levels = {
+            0: lowPrice,
+            0.618: lowPrice + (range * 0.618),
+            0.705: lowPrice + (range * 0.705),
+            1: highPrice
+        };
+    }
 
     let statusClass = "pending";
     let statusText = "PRE-OTE ⚪";
-    const levels = engineResult.levels;
-    const isBullishImpulse = engineResult.isBullishImpulse;
-
+    
     if (isBullishImpulse) {
         if (currentPrice <= levels[0.618] && currentPrice >= levels[0.705]) {
             statusClass = "tracking";
@@ -3897,7 +3958,7 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
         }
     } else {
         if (currentPrice >= levels[0.618] && currentPrice <= levels[0.705]) {
-            statusClass = "tracking";
+            statusClass = "swept";
             statusText = "SELL ZONE 🔴";
         } else if (currentPrice < levels[0.618]) {
             statusClass = "pending";
@@ -3915,16 +3976,12 @@ function calculateFibonacciOTE(candles, timeframeName, currentPrice) {
         currentPrice,
         statusClass,
         statusText,
-        range: levels[0] - levels[1],
-        tp: engineResult.tp,
-        sl: engineResult.sl
+        range,
+        tp: levels[0],
+        sl: levels[1]
     };
 }
 
-/**
- * Generates and appends a gorgeous "Multi-Timeframe Fibonacci OTE" card grid panel directly into the DOM
- * immediately following the "Institutional Liquidity Pools" section.
- */
 function renderFibonacciOteUI(mtfData) {
     let fibPanel = document.getElementById("fibonacciOtePanel");
     if (!fibPanel) {
@@ -3972,25 +4029,18 @@ function renderFibonacciOteUI(mtfData) {
         const currentPrice = candles.at(-1).close;
         const fib = calculateFibonacciOTE(candles, tf.name, currentPrice);
         
-        if (!fib) {
-            html += `
-                <div class="liquidity-tier-card error-card" style="background: var(--surface); border: 1px solid rgba(239, 68, 68, 0.2); padding: 1.2rem; border-radius: 8px; opacity: 0.7;">
-                    <div class="tier-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.8rem; border-bottom: 1px solid rgba(239,68,68,0.1); padding-bottom: 0.5rem;">
-                        <span style="font-weight:600; font-size:0.95rem; color:var(--text);">${tf.name}</span>
-                        <span class="pool-status swept" style="padding: 2px 8px; border-radius: 4px; font-weight:700; font-size:0.75rem;">NO VALID LEG</span>
-                    </div>
-                    <div style="font-size:0.8rem; color:var(--muted); text-align:center; padding: 1rem 0;">
-                        No valid Fibonacci OTE swing leg detected.
-                    </div>
-                </div>
-            `;
-            return;
-        }
+        if (!fib) return;
 
         const impulseLabel = fib.isBullishImpulse ? "🟢 Bullish Impulse" : "🔴 Bearish Impulse";
         
+        // Interactive clickable container cards with hover transitions
         html += `
-            <div class="liquidity-tier-card" style="background: var(--surface); border: 1px solid rgba(255,255,255,0.05); padding: 1.2rem; border-radius: 8px;">
+            <div class="liquidity-tier-card" 
+                 onclick="openSwingDeepDiveModal('${tf.id}', '${tf.name}')" 
+                 style="background: var(--surface); border: 1px solid rgba(255,255,255,0.05); padding: 1.2rem; border-radius: 8px; cursor: pointer; transition: transform 0.2s, border-color 0.2s;"
+                 onmouseover="this.style.borderColor='rgba(255,255,255,0.15)'; this.style.transform='translateY(-2px)';"
+                 onmouseout="this.style.borderColor='rgba(255,255,255,0.05)'; this.style.transform='translateY(0)';"
+                 title="Click to deep-dive into the Fair Value Gaps and Order Blocks of this swing leg">
                 <div class="tier-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.8rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.5rem;">
                     <span style="font-weight:600; font-size:0.95rem; color:var(--text);">${tf.name}</span>
                     <span class="pool-status ${fib.statusClass}" style="padding: 2px 8px; border-radius: 4px; font-weight:700; font-size:0.75rem;">${fib.statusText}</span>
@@ -4023,5 +4073,280 @@ function renderFibonacciOteUI(mtfData) {
             </div>
         `;
     });
+
     grid.innerHTML = html || `<p style="color:var(--muted);font-size:0.85rem;">No Fibonacci retracement data could be calculated.</p>`;
+}
+
+/**
+ * Deep-dive scanner: Calculates all Fair Value Gaps (FVG) and Order Blocks (OB) 
+ * located chronologically within the detected swing leg.
+ */
+function scanSwingLegDetails(candles, startIdx, endIdx, isBullish) {
+    const fvgs = [];
+    const obs = [];
+    const len = candles.length;
+
+    // 1. Scan for Fair Value Gaps inside the swing leg range [startIdx, endIdx]
+    for (let i = startIdx + 1; i < endIdx; i++) {
+        if (i < 1 || i >= len - 1) continue;
+        const prev = candles[i - 1];
+        const next = candles[i + 1];
+
+        if (isBullish) {
+            // Bullish FVG: next low > previous high
+            if (next.low > prev.high) {
+                const isTapped = candles.slice(i + 1).some(c => c.low < prev.high);
+                fvgs.push({
+                    type: "Bullish FVG",
+                    top: next.low,
+                    bottom: prev.high,
+                    priceLabel: `$${prev.high.toFixed(2)} → $${next.low.toFixed(2)}`,
+                    status: isTapped ? "Tapped (Mitigated) ⚪" : "Open (Unmitigated) 🟢",
+                    statusClass: isTapped ? "pending" : "tracking"
+                });
+            }
+        } else {
+            // Bearish FVG: next high < previous low
+            if (next.high < prev.low) {
+                const isTapped = candles.slice(i + 1).some(c => c.high > prev.low);
+                fvgs.push({
+                    type: "Bearish FVG",
+                    top: prev.low,
+                    bottom: next.high,
+                    priceLabel: `$${next.high.toFixed(2)} → $${prev.low.toFixed(2)}`,
+                    status: isTapped ? "Tapped (Mitigated) ⚪" : "Open (Unmitigated) 🔴",
+                    statusClass: isTapped ? "pending" : "swept"
+                });
+            }
+        }
+    }
+
+    // 2. Scan for Order Block near the origin of the swing (startIdx)
+    let obCandle = null;
+    const searchStart = Math.max(0, startIdx - 2);
+    const searchEnd = Math.min(len - 1, startIdx + 2);
+
+    for (let i = searchStart; i <= searchEnd; i++) {
+        const c = candles[i];
+        if (isBullish) {
+            if (c.close < c.open) { // bearish candle prior to expansion
+                if (!obCandle || c.low < obCandle.low) obCandle = c;
+            }
+        } else {
+            if (c.close > c.open) { // bullish candle prior to expansion
+                if (!obCandle || c.high > obCandle.high) obCandle = c;
+            }
+        }
+    }
+
+    // Fallback to the swing start candle if no opposite candle found
+    if (!obCandle && candles[startIdx]) {
+        obCandle = candles[startIdx];
+    }
+
+    if (obCandle) {
+        const isTapped = isBullish 
+            ? candles.slice(startIdx + 1).some(c => c.low < obCandle.low)
+            : candles.slice(startIdx + 1).some(c => c.high > obCandle.high);
+
+        obs.push({
+            type: isBullish ? "Bullish OB" : "Bearish OB",
+            top: obCandle.high,
+            bottom: obCandle.low,
+            priceLabel: `$${obCandle.low.toFixed(2)} → $${obCandle.high.toFixed(2)}`,
+            status: isTapped ? "Tapped (Mitigated) ⚪" : "Open (Unmitigated) 🌟",
+            statusClass: isTapped ? "pending" : (isBullish ? "tracking" : "swept")
+        });
+    }
+
+    return { fvgs, obs };
+}
+
+/**
+ * Interactive Modal Pop-Up: Displays the deep-dive analysis of FVGs and OBs
+ * inside the selected timeframe's swing leg.
+ */
+function openSwingDeepDiveModal(timeframeId, timeframeName) {
+    if (!state.lastMtfData) {
+        alert("Please run a bot preview first to load timeframe candles!");
+        return;
+    }
+
+    const candles = LiquidityEngine._getCandles(state.lastMtfData, timeframeId);
+    if (!candles || candles.length === 0) {
+        alert(`No candle history available for ${timeframeName}.`);
+        return;
+    }
+
+    const currentPrice = candles.at(-1).close;
+    const fib = calculateFibonacciOTE(candles, timeframeName, currentPrice);
+
+    if (!fib) {
+        alert(`Could not calculate Fibonacci swing leg for ${timeframeName}.`);
+        return;
+    }
+
+    // Re-detect the swing indexes chronologically to find our start and end index
+    const highs = [];
+    const lows = [];
+    const len = candles.length;
+    const k = 4;
+    for (let i = k; i < len - k; i++) {
+        let isHigh = true; let isLow = true;
+        for (let j = 1; j <= k; j++) {
+            if (candles[i].high <= candles[i-j].high || candles[i].high <= candles[i+j].high) isHigh = false;
+            if (candles[i].low >= candles[i-j].low || candles[i].low >= candles[i+j].low) isLow = false;
+        }
+        if (isHigh) highs.push({ index: i });
+        if (isLow) lows.push({ index: i });
+    }
+    if (highs.length === 0 || lows.length === 0) {
+        const k2 = 2;
+        for (let i = k2; i < len - k2; i++) {
+            let isHigh = true; let isLow = true;
+            for (let j = 1; j <= k2; j++) {
+                if (candles[i].high <= candles[i-j].high || candles[i].high <= candles[i+j].high) isHigh = false;
+                if (candles[i].low >= candles[i-j].low || candles[i].low >= candles[i+j].low) isLow = false;
+            }
+            if (isHigh) highs.push({ index: i });
+            if (isLow) lows.push({ index: i });
+        }
+    }
+    if (highs.length === 0 || lows.length === 0) {
+        const sliceSize = Math.min(40, len);
+        highs.push({ index: len - Math.floor(sliceSize / 2) });
+        lows.push({ index: len - sliceSize });
+    }
+
+    const allSwings = [];
+    highs.forEach(h => allSwings.push({ ...h, type: 'high' }));
+    lows.forEach(l => allSwings.push({ ...l, type: 'low' }));
+    allSwings.sort((a, b) => a.index - b.index);
+
+    const lastSwing = allSwings[allSwings.length - 1];
+    let prevSwing = null;
+    for (let i = allSwings.length - 2; i >= 0; i--) {
+        if (allSwings[i].type !== lastSwing.type) { prevSwing = allSwings[i]; break; }
+    }
+
+    const startIdx = prevSwing ? prevSwing.index : 0;
+    const endIdx = lastSwing ? lastSwing.index : len - 1;
+
+    // Scan the swing leg for FVGs and OBs
+    const zones = scanSwingLegDetails(candles, startIdx, endIdx, fib.isBullishImpulse);
+
+    // Create Modal HTML Overlay dynamically
+    let modal = document.getElementById("swingDeepDiveModal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "swingDeepDiveModal";
+        modal.style.position = "fixed";
+        modal.style.top = "0";
+        modal.style.left = "0";
+        modal.style.width = "100vw";
+        modal.style.height = "100vh";
+        modal.style.backgroundColor = "rgba(10, 15, 24, 0.85)";
+        modal.style.backdropFilter = "blur(8px)";
+        modal.style.zIndex = "10000";
+        modal.style.display = "flex";
+        modal.style.justifyContent = "center";
+        modal.style.alignItems = "center";
+        modal.style.opacity = "0";
+        modal.style.transition = "opacity 0.25s ease-out";
+        document.body.appendChild(modal);
+    }
+
+    // Build the lists inside the modal
+    let fvgRows = zones.fvgs.map(f => `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); padding: 0.6rem 0.8rem; border-radius:4px; border-left:3px solid ${fib.isBullishImpulse ? '#4e9f3d' : '#d9534f'};">
+            <div>
+                <span style="font-weight:600; font-size:0.85rem; color:var(--text);">${f.type}</span>
+                <div style="font-family:monospace; font-size:0.8rem; color:var(--muted); margin-top:0.2rem;">${f.priceLabel}</div>
+            </div>
+            <span class="pool-status ${f.statusClass}" style="padding: 2px 6px; border-radius: 4px; font-weight:700; font-size:0.7rem;">${f.status}</span>
+        </div>
+    `).join("");
+
+    if (zones.fvgs.length === 0) {
+        fvgRows = `<p style="color:var(--muted); font-size:0.85rem; text-align:center; padding: 1rem 0;">No Fair Value Gaps (FVG) detected in this swing leg.</p>`;
+    }
+
+    let obRows = zones.obs.map(o => `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); padding: 0.6rem 0.8rem; border-radius:4px; border-left:3px solid ${fib.isBullishImpulse ? '#4e9f3d' : '#d9534f'};">
+            <div>
+                <span style="font-weight:600; font-size:0.85rem; color:var(--text);">${o.type}</span>
+                <div style="font-family:monospace; font-size:0.8rem; color:var(--muted); margin-top:0.2rem;">${o.priceLabel}</div>
+            </div>
+            <span class="pool-status ${o.statusClass}" style="padding: 2px 6px; border-radius: 4px; font-weight:700; font-size:0.7rem;">${o.status}</span>
+        </div>
+    `).join("");
+
+    if (zones.obs.length === 0) {
+        obRows = `<p style="color:var(--muted); font-size:0.85rem; text-align:center; padding: 1rem 0;">No Order Blocks (OB) detected near the origin.</p>`;
+    }
+
+    modal.innerHTML = `
+        <div class="modal-content" style="background:#111827; border: 1px solid rgba(255,255,255,0.1); width:90%; max-width:600px; max-height:85vh; border-radius:12px; display:flex; flex-direction:column; box-shadow:0 20px 25px -5px rgba(0,0,0,0.5); overflow:hidden;">
+            <!-- Modal Header -->
+            <div style="padding: 1.2rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display:flex; justify-content:space-between; align-items:center; background:#1f2937;">
+                <div>
+                    <span style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">SMC Internal Structure</span>
+                    <h3 style="margin: 0.2rem 0 0; color:var(--text); font-size:1.2rem; font-weight:700;">🔍 ${timeframeName} Swing Leg Deep-Dive</h3>
+                </div>
+                <button onclick="closeSwingDeepDiveModal()" style="background:none; border:none; color:var(--muted); font-size:1.5rem; cursor:pointer; line-height:1; transition:color 0.2s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">&times;</button>
+            </div>
+            
+            <!-- Scrollable Content -->
+            <div style="padding: 1.5rem; overflow-y:auto; display:flex; flex-direction:column; gap:1.5rem;">
+                <!-- Swing Context Summary -->
+                <div style="background:rgba(255,255,255,0.03); padding:1rem; border-radius:8px; display:grid; grid-template-columns: 1fr 1fr; gap:0.8rem; font-size:0.85rem;">
+                    <div><span style="color:var(--muted);">Structure bias:</span> <strong style="color:var(--text);">${fib.isBullishImpulse ? 'Bullish Buy Pullback' : 'Bearish Sell Retrace'}</strong></div>
+                    <div><span style="color:var(--muted);">OTE Live Call:</span> <strong class="${fib.statusClass}" style="padding:1px 6px; border-radius:4px;">${fib.statusText}</strong></div>
+                    <div><span style="color:var(--muted);">Swing Start (SL):</span> <strong style="color:var(--text); font-family:monospace;">$${fib.sl.toFixed(2)}</strong></div>
+                    <div><span style="color:var(--muted);">Swing Target (TP):</span> <strong style="color:var(--text); font-family:monospace;">$${fib.tp.toFixed(2)}</strong></div>
+                </div>
+
+                <!-- Section: Order Blocks (Origin) -->
+                <div>
+                    <h4 style="margin:0 0 0.6rem 0; color:var(--text); font-size:0.9rem; font-weight:700; display:flex; align-items:center; gap:0.4rem;">
+                        <span>🧱</span> Swing Origin Order Blocks (OB)
+                    </h4>
+                    <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                        ${obRows}
+                    </div>
+                </div>
+
+                <!-- Section: Fair Value Gaps (FVG) -->
+                <div>
+                    <h4 style="margin:0 0 0.6rem 0; color:var(--text); font-size:0.9rem; font-weight:700; display:flex; align-items:center; gap:0.4rem;">
+                        <span>⚡</span> Swing Leg Fair Value Gaps (FVG)
+                    </h4>
+                    <div style="display:flex; flex-direction:column; gap:0.5rem; max-height: 250px; overflow-y: auto; padding-right:4px;">
+                        ${fvgRows}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="padding: 1rem 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); display:flex; justify-content:flex-end; background:#111827;">
+                <button onclick="closeSwingDeepDiveModal()" style="background:#1f2937; color:var(--text); border:1px solid rgba(255,255,255,0.1); padding:0.4rem 1.2rem; border-radius:6px; font-weight:600; cursor:pointer; font-size:0.85rem; transition:background 0.2s;" onmouseover="this.style.background='#374151'" onmouseout="this.style.background='#1f2937'">Close Analysis</button>
+            </div>
+        </div>
+    `;
+
+    // Trigger Fade-In
+    modal.style.display = "flex";
+    setTimeout(() => {
+        modal.style.opacity = "1";
+    }, 10);
+}
+
+function closeSwingDeepDiveModal() {
+    const modal = document.getElementById("swingDeepDiveModal");
+    if (modal) {
+        modal.style.opacity = "0";
+        setTimeout(() => {
+            modal.style.display = "none";
+        }, 250);
+    }
 }
