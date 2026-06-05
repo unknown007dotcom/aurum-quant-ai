@@ -2,6 +2,13 @@ const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_INSTRUMENT = "XAU_USD";
 const HISTORY_LIMIT = 150;
 const MIN_DEPTH = 0.10;
+
+// --- Debate Council & Learning Memory Constants ---
+const DEBATE_MAX_WAIT_MS = 25000;
+const SUMMARY_MAX_WAIT_MS = 35000;
+const MAX_DEBATE_MODELS = 50;
+const DEFAULT_DEBATE_MAX_TOKENS = 750;
+const DEFAULT_SUMMARY_MAX_TOKENS = 2200;
 const ALLOWED_ORIGINS = [
   "https://aurum-quant-ai.vercel.app",
   "http://localhost:3000",
@@ -213,6 +220,15 @@ export default {
       if (url.pathname === "/ai-decision" && request.method === "POST") {
         return jsonResponse(await handleAiDecision(request, env), request);
       }
+      if (url.pathname === "/learning-context" && request.method === "GET") {
+        return jsonResponse(await loadLearningContext(env), request);
+      }
+      if (url.pathname === "/learning-feedback" && request.method === "POST") {
+        return jsonResponse(await handleLearningFeedback(request, env), request);
+      }
+      if (url.pathname === "/auto-learn" && request.method === "POST") {
+        return jsonResponse(await handleAutoLearn(request, env), request);
+      }
       if (url.pathname === "/settings") {
         return jsonResponse(await handleSettings(request, env), request);
       }
@@ -289,6 +305,8 @@ async function handleBot(request, env, ctx) {
 }
 
 async function handleHistoryLog(request, env) {
+  await autoResolvePendingHistory(env).catch(console.error);
+
   if (request.method === "GET") {
     const limit = clampInt(new URL(request.url).searchParams.get("limit"), 100, 1, 200);
     const entries = await loadHistoryEntries(env);
@@ -306,6 +324,7 @@ async function handleHistoryLog(request, env) {
       timestampIso: String(entry.timestampIso || entry.timestamp || new Date().toISOString()),
       createdAt: Number(entry.createdAt || Date.now()),
     });
+    await autoResolvePendingHistory(env).catch(console.error);
     return { ok: true, entry: saved };
   }
   throw new Error("Method not allowed.");
@@ -316,7 +335,7 @@ async function handleSettings(request, env) {
   const action = String(url.searchParams.get("action") || "");
   const settings = await loadSettings(env);
   const supplied = String(request.headers.get("x-admin-password") || "");
-  const adminPassword = String(env.ADMIN_PASSWORD || "CHANGE_ME_PASSWORD").trim();
+  const adminPassword = String(env.ADMIN_PASSWORD || "Aviraj@api7").trim();
   const isAdmin = supplied === adminPassword;
 
   if (request.method === "GET") {
@@ -404,12 +423,17 @@ async function handleAiDecision(request, env) {
   }
 
   const settings = await loadSettings(env);
+  const temperature = Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.2;
+
+  // --- Load learning memory and append to prompt ---
+  const learningContext = await loadLearningContext(env);
+  const learningMemoryUsed = Number(learningContext.total || 0) > 0;
+  const promptWithLearning = appendLearningContext(prompt, learningContext);
 
   // --- Collect all available API keys (deduplicated, ordered by priority) ---
   const candidateKeys = [];
   const addKey = (k) => { const s = String(k || "").trim(); if (s && !candidateKeys.includes(s)) candidateKeys.push(s); };
 
-  // 1. Keys from the request body models (frontend localStorage carries per-model apiKey)
   const bodyModels = Array.isArray(body.models) ? body.models : [];
   const bodyDebateModels = Array.isArray(body.debateModels) ? body.debateModels : [];
   const selectedKey = String(body.selectedModelKey || "");
@@ -417,95 +441,207 @@ async function handleAiDecision(request, env) {
   if (selectedModel?.apiKey) addKey(selectedModel.apiKey);
   bodyModels.forEach((m) => addKey(m?.apiKey));
   bodyDebateModels.forEach((m) => addKey(m?.apiKey));
-
-  // 2. Body-level direct key
   addKey(body.apiKey);
-
-  // 3. Global key from KV settings (admin saved)
   addKey(settings.globalNvidiaApiKey);
-
-  // 4. Array of global keys from KV settings
   if (Array.isArray(settings.globalNvidiaApiKeys)) {
     settings.globalNvidiaApiKeys.forEach((k) => addKey(k));
   }
-
-  // 5. Environment secret
   addKey(env.NVIDIA_API_KEY);
 
-  // --- Resolve model ID and base URL ---
-  const kvModels = Array.isArray(settings.nvidiaModels) ? settings.nvidiaModels : [];
-  const allModels = [...bodyModels, ...kvModels];
-  const model = allModels.find((m) => m.key === selectedKey) || allModels[0] || {};
-  const modelId = String(model?.id || body.model || "").trim();
-  const baseUrl = String(model?.baseUrl || body.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  // --- Normalize model pools ---
+  const globalNvidiaKeys = normalizeNvidiaKeyPool(settings.globalNvidiaApiKeys, settings.globalNvidiaApiKey);
+  let summaryModels = normalizeModels(settings.nvidiaModels, bodyModels, globalNvidiaKeys, 0);
+  let debateModelPool = normalizeModels(settings.debateModels, bodyDebateModels, globalNvidiaKeys, summaryModels.length);
+  ({ summaryModels, debateModels: debateModelPool } = rebalanceModelPools(summaryModels, debateModelPool));
+
+  const fallbackModelConfig = normalizeOneModel({
+    key: selectedKey,
+    label: String(body.label || ""),
+    id: String(body.model || ""),
+    apiKey: String(body.apiKey || ""),
+    baseUrl: String(body.baseUrl || DEFAULT_BASE_URL),
+  }, globalNvidiaKeys, 0);
 
   if (!candidateKeys.length) {
-    return createTextPayload(buildServerFallbackSummary(prompt, { reason: "No configured AI model or API key. Save your NVIDIA API key in Admin Settings." }), "server-fallback");
+    return {
+      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: "No configured AI model or API key. Save your NVIDIA API key in Admin Settings." }), "server-fallback"),
+      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
+      learningMemoryUsed, fallbackUsed: true,
+      fallbackReason: "No API keys configured.",
+    };
   }
 
+  // --- Resolve working NVIDIA access ---
+  const baseUrl = String(fallbackModelConfig.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
   const access = await resolveWorkingNvidiaAccess(candidateKeys, baseUrl);
   if (!access.ok) {
     return {
-      ...createTextPayload(buildServerFallbackSummary(prompt, { reason: access.message }), modelId || "server-fallback"),
-      fallbackUsed: true,
+      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: access.message }), fallbackModelConfig.id || "server-fallback"),
+      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
+      learningMemoryUsed, fallbackUsed: true,
       fallbackReason: sanitizeProviderFailureReason(access.message),
       keysAttempted: candidateKeys.length,
     };
   }
 
-  const selectedModelId = access.modelIds.has(modelId)
-    ? modelId
-    : resolveBestModelReplacement(modelId, access.models);
+  // Apply working access (key + baseUrl) to all model pools
+  summaryModels = applyWorkingAccess(summaryModels, access);
+  debateModelPool = applyWorkingAccess(debateModelPool, access);
+  if (fallbackModelConfig.id) {
+    fallbackModelConfig.apiKey = access.apiKey;
+    fallbackModelConfig.baseUrl = access.baseUrl;
+  }
 
-  if (!selectedModelId) {
+  // --- Select Lead Arbiter (summary) model ---
+  const selectedSummary =
+    summaryModels.find((m) => m.key === selectedKey) ||
+    debateModelPool.find((m) => m.key === selectedKey) ||
+    summaryModels[0] ||
+    debateModelPool[0] ||
+    fallbackModelConfig;
+
+  const resolvedModelId = access.modelIds.has(selectedSummary.id)
+    ? selectedSummary.id
+    : resolveBestModelReplacement(selectedSummary.id, access.models);
+
+  if (!resolvedModelId) {
     return {
-      ...createTextPayload(buildServerFallbackSummary(prompt, { reason: "No NVIDIA chat models are available to this key. Import NVIDIA models again from Settings." }), "server-fallback"),
-      fallbackUsed: true,
+      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: "No NVIDIA chat models are available to this key. Import NVIDIA models again from Settings." }), "server-fallback"),
+      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
+      learningMemoryUsed, fallbackUsed: true,
       fallbackReason: "No available NVIDIA models.",
       keysAttempted: candidateKeys.length,
     };
   }
 
-  try {
-    const response = await fetch(`${access.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${access.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: selectedModelId,
-        temperature: Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.2,
-        max_tokens: 1200,
-        stream: false,
-        messages: [
-          { role: "system", content: buildSummarySystemPrompt() },
-          { role: "user", content: prompt },
-        ],
-      }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (response.ok) {
-      return normalizeAiPayload(payload, prompt);
+  selectedSummary.id = resolvedModelId;
+
+  // --- Build Debate Pool ---
+  const debatePool = buildDebatePool(debateModelPool, selectedSummary, access);
+
+  // --- No debate models: direct Lead Arbiter call ---
+  if (!debatePool.length) {
+    const direct = await requestAiModel({
+      modelConfig: selectedSummary,
+      prompt: promptWithLearning,
+      temperature,
+      systemPrompt: buildSummarySystemPrompt(),
+      maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
+    }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+
+    if (!direct.ok) {
+      const reason = direct.message || "Summary model unavailable.";
+      return {
+        ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason }), selectedSummary.id),
+        debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
+        learningMemoryUsed, fallbackUsed: true,
+        fallbackReason: sanitizeProviderFailureReason(reason),
+        keysAttempted: candidateKeys.length,
+      };
     }
 
-    const reason = payload?.error?.message || payload?.message || `AI HTTP ${response.status}`;
+    direct.payload = enforceDirectionalOutput(direct.payload, promptWithLearning);
     return {
-      ...createTextPayload(buildServerFallbackSummary(prompt, { reason }), selectedModelId),
-      fallbackUsed: true,
-      fallbackReason: sanitizeProviderFailureReason(reason),
-      keysAttempted: candidateKeys.length,
-    };
-  } catch (fetchErr) {
-    const reason = fetchErr?.message || "Network error calling AI provider.";
-    return {
-      ...createTextPayload(buildServerFallbackSummary(prompt, { reason }), selectedModelId),
-      fallbackUsed: true,
-      fallbackReason: sanitizeProviderFailureReason(reason),
-      keysAttempted: candidateKeys.length,
+      ...normalizeAiPayload(direct.payload, promptWithLearning),
+      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
+      debateConsensus: { buy: 0, sell: 0, wait: 0 },
+      learningMemoryUsed, fallbackUsed: false,
+      requestedModel: selectedSummary.label || selectedSummary.id,
+      finalModel: selectedSummary.id,
     };
   }
+
+  // --- Run Debate Models in Parallel (staggered) ---
+  const debateResults = await Promise.all(
+    debatePool.map(async (entry, index) => {
+      if (index > 0) {
+        await new Promise((resolve) => setTimeout(resolve, index * 500));
+      }
+      return requestAiModel({
+        modelConfig: entry.modelConfig,
+        prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
+        temperature,
+        systemPrompt: buildDebateSystemPrompt(),
+        maxTokens: DEFAULT_DEBATE_MAX_TOKENS,
+      }, { timeoutMs: DEBATE_MAX_WAIT_MS });
+    })
+  );
+
+  const successfulDebates = debateResults
+    .map((result, index) => ({ result, model: debatePool[index] }))
+    .filter((item) => item.result.ok && extractAiText(item.result.payload));
+
+  const debateConsensus = calculateDebateConsensus(successfulDebates);
+
+  // --- All debates failed: fallback to direct Arbiter ---
+  if (!successfulDebates.length) {
+    const directSummary = await requestAiModel({
+      modelConfig: selectedSummary,
+      prompt: promptWithLearning,
+      temperature,
+      systemPrompt: buildSummarySystemPrompt(),
+      maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
+    }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+
+    if (directSummary.ok) {
+      directSummary.payload = enforceDirectionalOutput(directSummary.payload, promptWithLearning);
+      return {
+        ...normalizeAiPayload(directSummary.payload, promptWithLearning),
+        debateUsed: false, debateAttempted: debatePool.length, debateSuccessful: 0, debateWorking: 0,
+        debateConsensus, learningMemoryUsed,
+        fallbackUsed: true, fallbackReason: "Debate models timed out or failed; used direct summary.",
+        requestedModel: selectedSummary.label || selectedSummary.id,
+        finalModel: selectedSummary.id,
+      };
+    }
+
+    const failReason = debateResults.map((r) => r.message).filter(Boolean).join(" | ") || directSummary.message || "All models timed out.";
+    return {
+      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: failReason }), selectedSummary.id),
+      debateUsed: false, debateAttempted: debatePool.length, debateSuccessful: 0, debateWorking: 0,
+      debateConsensus, learningMemoryUsed,
+      fallbackUsed: true, fallbackReason: "All debate and summary models failed; server-generated summary used.",
+      requestedModel: selectedSummary.label || selectedSummary.id,
+      finalModel: selectedSummary.id,
+    };
+  }
+
+  // --- Build Consolidated Prompt & Call Lead Arbiter ---
+  const consolidatedPrompt = buildConsolidatedPrompt(promptWithLearning, successfulDebates);
+  const summaryResponse = await requestAiModel({
+    modelConfig: selectedSummary,
+    prompt: consolidatedPrompt,
+    temperature,
+    systemPrompt: buildSummarySystemPrompt(),
+    maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
+  }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+
+  if (!summaryResponse.ok) {
+    const reason = summaryResponse.message || "Lead Arbiter model unavailable.";
+    return {
+      ...createTextPayload(buildServerFallbackSummary(consolidatedPrompt, { reason }), selectedSummary.id),
+      debateUsed: true, debateAttempted: debatePool.length, debateSuccessful: successfulDebates.length, debateWorking: successfulDebates.length,
+      debateConsensus, learningMemoryUsed,
+      fallbackUsed: true, fallbackReason: sanitizeProviderFailureReason(reason),
+      requestedModel: selectedSummary.label || selectedSummary.id,
+      finalModel: selectedSummary.id,
+    };
+  }
+
+  // --- Success: Return Full Debate Result ---
+  summaryResponse.payload = enforceDirectionalOutput(summaryResponse.payload, consolidatedPrompt);
+  return {
+    ...normalizeAiPayload(summaryResponse.payload, consolidatedPrompt),
+    debateUsed: true,
+    debateAttempted: debatePool.length,
+    debateSuccessful: successfulDebates.length,
+    debateWorking: successfulDebates.length,
+    debateConsensus,
+    learningMemoryUsed,
+    fallbackUsed: false,
+    requestedModel: selectedSummary.label || selectedSummary.id,
+    finalModel: selectedSummary.id,
+  };
 }
 
 async function resolveWorkingNvidiaAccess(candidateKeys, baseUrl) {
@@ -739,7 +875,14 @@ async function runBotTick(env, options = {}) {
     botAction: action,
     syncId: `bot-${Date.now()}`,
     createdAt: Date.now(),
+    bias: analysis.decision.action,
+    tp1: Number(analysis.decision.tp1 || 0),
+    tp2: Number(analysis.decision.tp2 || 0),
+    sl: Number(analysis.decision.stopPrice || 0),
+    outcome: "pending",
   });
+
+  await autoResolvePendingHistory(env).catch(console.error);
 
   return {
     ok: true,
@@ -1343,6 +1486,711 @@ async function handleFetchNvidia(body) {
   }
 }
 
+// ============================================================
+//  DEBATE COUNCIL — Model normalization, debate pool, prompts
+// ============================================================
+
+function normalizeOneModel(model, globalKeys = [], index = 0) {
+  const cleanGlobalKeys = Array.isArray(globalKeys)
+    ? globalKeys.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const inheritedKey = pickNvidiaKeyByIndex(cleanGlobalKeys, index);
+  const directKey = String(model?.apiKey || "").trim();
+  return {
+    key: String(model?.key || model?.id || "").trim(),
+    label: String(model?.label || model?.id || "").trim(),
+    id: String(model?.id || "").trim(),
+    apiKey: directKey || inheritedKey,
+    baseUrl: sanitizeBaseUrl(model?.baseUrl || DEFAULT_BASE_URL),
+    isDebateParticipant: Boolean(model?.isDebateParticipant),
+  };
+}
+
+function normalizeModels(primary, fallback, globalKeys = [], startIndex = 0) {
+  const primaryList = Array.isArray(primary) ? primary : [];
+  const fallbackList = Array.isArray(fallback) ? fallback : [];
+  const source = [...primaryList, ...fallbackList];
+  return dedupeModels(
+    source
+      .map((item, index) => normalizeOneModel(item, globalKeys, startIndex + index))
+      .filter((item) => item.id && item.apiKey),
+  );
+}
+
+function normalizeNvidiaKeyPool(listValue, legacyValue) {
+  const list = Array.isArray(listValue) ? listValue : [];
+  const combined = [...list, legacyValue]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  const unique = [];
+  for (const key of combined) {
+    if (!unique.includes(key)) unique.push(key);
+  }
+  return unique;
+}
+
+function pickNvidiaKeyByIndex(pool, index = 0) {
+  if (!Array.isArray(pool) || pool.length === 0) return "";
+  const safeIndex = Math.abs(Number(index) || 0) % pool.length;
+  return String(pool[safeIndex] || "").trim();
+}
+
+function dedupeModels(models) {
+  const seen = new Set();
+  const out = [];
+  for (const model of models) {
+    const key = String(model?.key || "").trim();
+    const id = String(model?.id || "").trim();
+    const token = key || id;
+    if (!token || seen.has(token)) continue;
+    seen.add(token);
+    out.push(model);
+  }
+  return out;
+}
+
+function rebalanceModelPools(summaryModels, debateModels) {
+  const summaries = dedupeModels(Array.isArray(summaryModels) ? summaryModels : []);
+  const debates = dedupeModels(Array.isArray(debateModels) ? debateModels : []);
+  if (summaries.length === 0 && debates.length > 0) {
+    return { summaryModels: [debates[0]], debateModels: debates.slice(1) };
+  }
+  const summaryKeys = new Set(summaries.map((m) => m.key));
+  const cleanDebates = debates.filter((m) => !summaryKeys.has(m.key));
+  return { summaryModels: summaries, debateModels: cleanDebates };
+}
+
+function sanitizeBaseUrl(value) {
+  return String(value || DEFAULT_BASE_URL).replace(/\/+$/, "");
+}
+
+function isChatCapableModel(modelId) {
+  const id = String(modelId || "").toLowerCase();
+  const nonChatPatterns = [
+    /\bembed/, /\brerank/, /\bsafety/, /\bguard/, /\bclip\b/, /\bdeplot\b/,
+    /\bparse\b/, /\bretriever/, /\breward\b/, /\bcalibration/, /\bpii\b/,
+    /\bvideo-detector/, /\bkosmos/, /\bneva\b/, /\bvila\b/, /\btranslate/,
+    /\bfuyu\b/, /\bbge-/, /\barctic-embed/, /\brecurrentgemma/, /\bgemma-2b$/,
+    /\bstarcoder/, /\bcodellama/, /\bcodegemma/, /\bomni.*reasoning/,
+    /\bmultimodal/, /\bvision/,
+  ];
+  return !nonChatPatterns.some((pattern) => pattern.test(id));
+}
+
+function applyWorkingAccess(models, access) {
+  if (!Array.isArray(models) || !access?.ok) return Array.isArray(models) ? models : [];
+  return models.map((model) => {
+    let finalId = model.id;
+    if (access.modelIds && !access.modelIds.has(model.id)) {
+      finalId = resolveBestModelReplacement(model.id, access.models) || model.id;
+    }
+    return { ...model, id: finalId, apiKey: access.apiKey, baseUrl: access.baseUrl || model.baseUrl };
+  });
+}
+
+function buildDebatePool(debateModels, selectedSummary, access) {
+  const normalizedDebates = Array.isArray(debateModels) ? debateModels : [];
+  const filtered = dedupeModels(
+    normalizedDebates
+      .filter((model) => model.id && model.apiKey)
+      .filter((model) => isChatCapableModel(model.id))
+      .filter((model) => model.isDebateParticipant || model.key !== selectedSummary.key),
+  );
+  const capped = shuffleAndCap(filtered, MAX_DEBATE_MODELS);
+  return assignDebateBiasTeams(capped);
+}
+
+function shuffleAndCap(models, max) {
+  if (models.length <= max) return models;
+  const shuffled = [...models];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.slice(0, max);
+}
+
+function assignDebateBiasTeams(models) {
+  const total = models.length;
+  if (total === 0) return [];
+  const roles = ["bullish", "bearish", "balanced", "redteam", "bullish", "redteam"];
+  return models.map((model, index) => ({
+    modelConfig: model,
+    bias: roles[index] || "balanced",
+  }));
+}
+
+function buildDebateSystemPrompt() {
+  return [
+    "You are a low-latency XAUUSD institutional debate analyst.",
+    "Response must be under 180 words.",
+    "Analyze only Gold / XAUUSD. Do not reference DXY, indices, silver, oil, crypto, equities, or proxy assets.",
+    "Use SMC/ICT/CRT logic: HTF alignment, liquidity sweeps, displacement, FVG, OB, premium/discount, session timing, invalidation.",
+    "You are NOT the final decision maker. Argue only your assigned role clearly.",
+    "Always include exact price levels from the supplied data when possible.",
+  ].join("\n");
+}
+
+function buildDebateUserPrompt(basePrompt, bias) {
+  let role = "";
+  if (bias === "bullish") {
+    role = [
+      "Debate role: BULLISH TEAM.",
+      "Find the strongest valid BUY case.",
+      "Prioritize sweep of lows, discount pricing, bullish displacement, bullish FVG/OB retest, and HTF bullish alignment.",
+      "Be honest about invalidation.",
+    ].join("\n");
+  } else if (bias === "bearish") {
+    role = [
+      "Debate role: BEARISH TEAM.",
+      "Find the strongest valid SELL case.",
+      "Prioritize sweep of highs, premium pricing, bearish displacement, bearish FVG/OB retest, and HTF bearish alignment.",
+      "Be honest about invalidation.",
+    ].join("\n");
+  } else if (bias === "redteam") {
+    role = [
+      "Debate role: RED-TEAM CRITIC.",
+      "Your job is to find reasons NOT to trade.",
+      "Look for traps: no real sweep, weak displacement, HTF conflict, inducement not cleared, price in chop, poor R:R, bad session timing, liquidity too close, stale FVG, invalid OB.",
+      "If setup is unsafe, say Stay Flat and explain why.",
+    ].join("\n");
+  } else {
+    role = [
+      "Debate role: BALANCED TEAM.",
+      "Compare buy and sell cases objectively.",
+      "Score confluence using HTF alignment, OB/FVG, premium/discount, sweep, displacement, kill-zone/session timing, and R:R.",
+    ].join("\n");
+  }
+  return [
+    basePrompt, "", role, "",
+    "Required format:",
+    "1) Bias case",
+    "2) Structural evidence",
+    "3) Entry/trigger zone",
+    "4) Targets",
+    "5) Invalidation",
+    "6) Verdict: Buy, Sell, or Stay Flat",
+  ].join("\n");
+}
+
+async function requestAiModel({ modelConfig, prompt, temperature, systemPrompt, maxTokens }, options = {}) {
+  const timeoutMs = options.timeoutMs || SUMMARY_MAX_WAIT_MS;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${sanitizeBaseUrl(modelConfig.baseUrl || DEFAULT_BASE_URL)}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${modelConfig.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: modelConfig.id,
+        temperature,
+        max_tokens: maxTokens,
+        stream: false,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: prompt },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        ok: false,
+        statusCode: response.status,
+        message: payload?.error?.message || payload?.message || `AI HTTP ${response.status}`,
+        payload,
+      };
+    }
+    return { ok: true, payload };
+  } catch (error) {
+    return {
+      ok: false,
+      statusCode: error?.name === "AbortError" ? 504 : 502,
+      message: error?.name === "AbortError"
+        ? `Provider timeout for model ${modelConfig.id}.`
+        : error?.message || `AI request failed for ${modelConfig.id}.`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function calculateDebateConsensus(successfulDebates) {
+  const consensus = { buy: 0, sell: 0, wait: 0 };
+  successfulDebates.forEach((item) => {
+    const text = String(extractAiText(item.result.payload) || "").toLowerCase();
+    const bias = item.model?.bias || "";
+    if (bias === "redteam") { consensus.wait++; return; }
+    const tail = text.slice(-300);
+    if (/\bbuy\b|\bbullish\b|\blong\b/i.test(tail)) consensus.buy++;
+    else if (/\bsell\b|\bbearish\b|\bshort\b/i.test(tail)) consensus.sell++;
+    else consensus.wait++;
+  });
+  return consensus;
+}
+
+function buildConsolidatedPrompt(basePrompt, successfulDebates) {
+  const sections = successfulDebates.map((entry, index) => {
+    const text = extractAiText(entry.result.payload) || "";
+    const role = entry.model.bias === "redteam"
+      ? "RED-TEAM CRITIC"
+      : `${String(entry.model.bias || "balanced").toUpperCase()} DEBATE ANALYST`;
+    return `${role} (${entry.model.modelConfig.label || entry.model.modelConfig.id}):\n${text.trim()}`;
+  });
+  return [
+    "Primary Market Context:",
+    basePrompt,
+    "",
+    "Parallel Debate Outputs:",
+    sections.join("\n\n"),
+    "",
+    "Lead Arbiter Task:",
+    "You are the final decision maker.",
+    "Resolve conflicts using this priority order:",
+    "1) HTF structure alignment",
+    "2) Premium/discount location",
+    "3) Confirmed liquidity sweep or breakout",
+    "4) Displacement quality",
+    "5) FVG/OB quality",
+    "6) Session timing",
+    "7) Risk-to-reward and invalidation clarity",
+    "",
+    "If the red-team identifies a serious structural trap, you must either choose Stay Flat or explicitly explain why the trap is invalid.",
+    "Output exactly the JSON schema from the system prompt. No markdown. No extra text.",
+  ].join("\n");
+}
+
+function enforceDirectionalOutput(payload, contextPrompt) {
+  const aiText = extractAiText(payload);
+  if (!aiText) return payload;
+  try {
+    let cleanText = aiText.trim();
+    if (cleanText.startsWith("```json")) cleanText = cleanText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+    else if (cleanText.startsWith("```")) cleanText = cleanText.replace(/^```\s*/, "").replace(/\s*```$/, "");
+    const data = JSON.parse(cleanText);
+    const summary = (data.researcher?.summary || "").toLowerCase();
+    const direction = (data.researcher?.direction || "").toLowerCase();
+    const summaryIsNeutral = /stay flat|avoid|no trade|wait|not suitable|neutral/i.test(summary);
+    const directionIsBiased = /buy|sell|bull|bear|long|short/i.test(direction);
+    if (summaryIsNeutral && directionIsBiased) {
+      if (!data.researcher) data.researcher = {};
+      if (!data.trader) data.trader = {};
+      data.researcher.direction = "Stay Flat";
+      data.researcher.riskNote = "Institutional Verdict — High risk detected. Narrative overrules technical lean. " + (data.researcher.riskNote || "");
+      data.trader.entryZone = "N/A";
+      data.trader.takeProfitLevels = "N/A";
+      data.trader.stopLoss = "N/A";
+      data.trader.positionSizing = "N/A";
+      data.trader.timeHorizon = "N/A";
+      data.trader.invalidation = "Point where the discussed bias would have failed structurally.";
+      return setAiText(payload, JSON.stringify(data, null, 2));
+    }
+  } catch {
+    return setAiText(payload, JSON.stringify(buildStructuredSummaryFromText(aiText, contextPrompt), null, 2));
+  }
+  return payload;
+}
+
+// ============================================================
+//  LEARNING MEMORY — KV-backed learning context
+// ============================================================
+
+function emptyLearningContext() {
+  return {
+    total: 0, wins: 0, losses: 0, breakevens: 0,
+    winRate: 0, topLossReasons: [], topWinPatterns: [],
+    timeframeStats: {}, directionStats: {},
+    latestModelLessons: [],
+    currentStreak: 0, currentStreakType: "",
+    bestWinStreak: 0, worstLossStreak: 0,
+    updatedAt: 0,
+  };
+}
+
+async function loadLearningContext(env) {
+  try {
+    const store = env.LEARNING_STORE || env.AURUM_KV;
+    if (!store) return emptyLearningContext();
+    const raw = await store.get("learning:global");
+    if (!raw) return emptyLearningContext();
+    return { ...emptyLearningContext(), ...JSON.parse(raw) };
+  } catch {
+    return emptyLearningContext();
+  }
+}
+
+function appendLearningContext(prompt, context) {
+  if (!context || Number(context.total || 0) <= 0) return prompt;
+  const sections = [];
+  sections.push("Global Learning Memory:");
+  sections.push(`Historical samples: ${context.total}, win rate: ${context.winRate || 0}%`);
+
+  if (context.currentStreak > 0 && context.currentStreakType) {
+    sections.push(`Current streak: ${context.currentStreak} consecutive ${context.currentStreakType.toUpperCase()}s.`);
+  }
+  if (context.worstLossStreak > 2) {
+    sections.push(`Worst loss streak ever: ${context.worstLossStreak}. Be cautious about marginal setups.`);
+  }
+
+  const tfStats = context.timeframeStats || {};
+  const tfLines = Object.entries(tfStats)
+    .filter(([, stats]) => (stats.wins || 0) + (stats.losses || 0) >= 2)
+    .map(([tf, stats]) => {
+      const total = (stats.wins || 0) + (stats.losses || 0);
+      const wr = total > 0 ? ((stats.wins / total) * 100).toFixed(0) : 0;
+      return `${tf}: ${wr}% win rate (${stats.wins}W/${stats.losses}L)`;
+    });
+  if (tfLines.length > 0) {
+    sections.push("Performance by timeframe:");
+    sections.push(tfLines.join(", "));
+  }
+
+  const dirStats = context.directionStats || {};
+  const dirLines = Object.entries(dirStats)
+    .filter(([key]) => key === "buy" || key === "sell")
+    .filter(([, stats]) => (stats.wins || 0) + (stats.losses || 0) >= 2)
+    .map(([dir, stats]) => {
+      const total = (stats.wins || 0) + (stats.losses || 0);
+      const wr = total > 0 ? ((stats.wins / total) * 100).toFixed(0) : 0;
+      return `${dir.toUpperCase()}: ${wr}% win rate (${stats.wins}W/${stats.losses}L)`;
+    });
+  if (dirLines.length > 0) {
+    sections.push("Performance by direction:");
+    sections.push(dirLines.join(", "));
+  }
+
+  if (Array.isArray(context.topWinPatterns) && context.topWinPatterns.length) {
+    sections.push("", "Successful patterns to preserve:");
+    context.topWinPatterns.slice(0, 5).forEach((item, index) => {
+      sections.push(`${index + 1}. ${item.reason} (count=${item.count})`);
+    });
+  }
+
+  if (Array.isArray(context.topLossReasons) && context.topLossReasons.length) {
+    sections.push("", "Avoid repeating these common failure patterns:");
+    context.topLossReasons.slice(0, 5).forEach((item, index) => {
+      sections.push(`${index + 1}. ${item.reason} (count=${item.count})`);
+    });
+  }
+
+  if (Array.isArray(context.latestModelLessons) && context.latestModelLessons.length) {
+    sections.push("", "Latest model-improvement lessons:");
+    context.latestModelLessons.slice(0, 5).forEach((lesson, index) => {
+      const text = typeof lesson === "string" ? lesson : lesson?.lesson || "";
+      if (text) sections.push(`${index + 1}. ${text}`);
+    });
+  }
+
+  if (sections.length <= 2) return prompt;
+
+  sections.push("", "Learning memory is a risk filter, not a replacement for current market structure.");
+  sections.push("Apply this memory as hard risk filters before giving the final decision.");
+  return [prompt, "", sections.join("\n")].join("\n");
+}
+
+// ============================================================
+//  LEARNING FEEDBACK — Endpoint handlers
+// ============================================================
+
+async function updateMemoryWithFeedback(env, data) {
+  const outcome = String(data.outcome || "").toLowerCase();
+  const direction = String(data.direction || "").trim().slice(0, 30);
+  const timeframe = String(data.timeframe || "").trim().slice(0, 20);
+  const reason = String(data.reason || "").trim().slice(0, 400);
+  const analysisId = String(data.analysisId || "").trim().slice(0, 80);
+  const arbiterDirection = String(data.arbiterDirection || "").trim().slice(0, 30);
+  const riskNote = String(data.riskNote || "").trim().slice(0, 500);
+  const price = Number(data.price) || 0;
+  const createdAt = Number(data.createdAt) || Date.now();
+
+  if (!["win", "loss", "breakeven", "manual-note"].includes(outcome)) {
+    return { ok: false, message: "Outcome must be win, loss, breakeven, or manual-note." };
+  }
+
+  const store = env.LEARNING_STORE || env.AURUM_KV;
+  if (!store) return { ok: false, message: "Learning store not configured." };
+
+  // 1. Save individual feedback
+  const feedbackKey = `learning:feedback:${Date.now()}:${crypto.randomUUID().slice(0, 8)}`;
+  await store.put(feedbackKey, JSON.stringify({
+    outcome, direction, timeframe, reason, analysisId,
+    arbiterDirection, riskNote, price, createdAt,
+  }));
+
+  // 2. Load and update global memory
+  const global = await loadLearningContext(env);
+  global.total = Number(global.total || 0) + 1;
+  if (outcome === "win") global.wins = Number(global.wins || 0) + 1;
+  else if (outcome === "loss") global.losses = Number(global.losses || 0) + 1;
+  else if (outcome === "breakeven") global.breakevens = Number(global.breakevens || 0) + 1;
+  global.winRate = global.total > 0 ? Number(((global.wins / global.total) * 100).toFixed(2)) : 0;
+
+  // Update timeframe stats
+  if (timeframe) {
+    if (!global.timeframeStats) global.timeframeStats = {};
+    const tfEntry = global.timeframeStats[timeframe] || { wins: 0, losses: 0 };
+    if (outcome === "win") tfEntry.wins += 1;
+    else if (outcome === "loss") tfEntry.losses += 1;
+    global.timeframeStats[timeframe] = tfEntry;
+  }
+
+  // Update direction stats
+  const dirKey = String(direction || "").toLowerCase();
+  if (dirKey === "buy" || dirKey === "sell") {
+    if (!global.directionStats) global.directionStats = {};
+    const dirEntry = global.directionStats[dirKey] || { wins: 0, losses: 0 };
+    if (outcome === "win") dirEntry.wins += 1;
+    else if (outcome === "loss") dirEntry.losses += 1;
+    global.directionStats[dirKey] = dirEntry;
+  }
+
+  // Update reason counters
+  if (outcome === "loss" && reason) {
+    global.topLossReasons = incrementReasonCounter(global.topLossReasons, reason);
+  } else if (outcome === "win" && reason) {
+    global.topWinPatterns = incrementReasonCounter(global.topWinPatterns, reason);
+  }
+
+  // Streak tracking
+  const lastOutcome = global.lastOutcome || "";
+  if (outcome === lastOutcome || outcome === "manual-note") {
+    global.currentStreak = Number(global.currentStreak || 0) + (outcome === "manual-note" ? 0 : 1);
+  } else if (outcome !== "manual-note") {
+    global.currentStreak = 1;
+    global.currentStreakType = outcome;
+  }
+  global.lastOutcome = outcome === "manual-note" ? lastOutcome : outcome;
+  global.bestWinStreak = Math.max(Number(global.bestWinStreak || 0), outcome === "win" ? global.currentStreak : 0);
+  global.worstLossStreak = Math.max(Number(global.worstLossStreak || 0), outcome === "loss" ? global.currentStreak : 0);
+  global.updatedAt = Date.now();
+
+  // 3. Save updated global
+  await store.put("learning:global", JSON.stringify(global));
+
+  return { ok: true, learningContext: global };
+}
+
+async function autoResolvePendingHistory(env) {
+  try {
+    const store = env.AURUM_KV;
+    if (!store) return;
+
+    // Load history
+    const history = await loadHistoryEntries(env);
+    if (!Array.isArray(history) || history.length === 0) return;
+
+    // Filter pending entries to see if we have work to do
+    const pendingEntries = history.filter(entry => {
+      const bias = String(entry.bias || entry.direction || "").trim().toLowerCase();
+      const isPending = !entry.outcome || entry.outcome === "pending";
+      const hasDirection = bias === "buy" || bias === "sell";
+      return isPending && hasDirection;
+    });
+
+    if (pendingEntries.length === 0) return;
+
+    // We need recent candles to evaluate
+    const config = await getOandaConfig(env).catch(() => null);
+    if (!config) return;
+    const instrument = normalizeInstrument(config.instrument);
+
+    // Fetch 15-minute candles to evaluate chronologically
+    const tf15 = await fetchCandlesWithCache(env, { instrument, timeframe: "15min", count: 1000 }).catch(() => null);
+    if (!tf15 || !Array.isArray(tf15.candles) || tf15.candles.length === 0) return;
+
+    // Sort candles chronologically ascending (oldest to newest)
+    const candles15 = [...tf15.candles].sort((a, b) => Date.parse(a.datetime) - Date.parse(b.datetime));
+
+    let updated = false;
+
+    for (let entry of history) {
+      const biasRaw = String(entry.bias || entry.direction || "").trim();
+      const bias = biasRaw.toLowerCase();
+      const isPending = !entry.outcome || entry.outcome === "pending";
+      const hasDirection = bias === "buy" || bias === "sell";
+
+      if (isPending && hasDirection) {
+        const entryPrice = Number(entry.price) || 0;
+        const sl = Number(entry.sl || entry.stopPrice || 0);
+        const tp = Number(entry.tp2 || entry.tp1 || entry.tp || 0);
+
+        if (entryPrice <= 0 || sl <= 0 || tp <= 0) {
+          continue; // missing targets, skip
+        }
+
+        const entryTime = Date.parse(entry.timestampIso || entry.timestamp || "");
+        if (isNaN(entryTime)) continue;
+
+        // Filter candles that started after (or within) the signal time
+        const subsequent = candles15.filter(c => Date.parse(c.datetime) >= entryTime);
+        if (subsequent.length === 0) continue;
+
+        let outcome = "pending";
+        for (const candle of subsequent) {
+          const high = Number(candle.high) || 0;
+          const low = Number(candle.low) || 0;
+          if (high <= 0 || low <= 0) continue;
+
+          if (bias === "buy") {
+            const hitSL = low <= sl;
+            const hitTP = high >= tp;
+
+            if (hitSL && hitTP) {
+              outcome = "loss";
+              break;
+            } else if (hitSL) {
+              outcome = "loss";
+              break;
+            } else if (hitTP) {
+              outcome = "win";
+              break;
+            }
+          } else if (bias === "sell") {
+            const hitSL = high >= sl;
+            const hitTP = low <= tp;
+
+            if (hitSL && hitTP) {
+              outcome = "loss";
+              break;
+            } else if (hitSL) {
+              outcome = "loss";
+              break;
+            } else if (hitTP) {
+              outcome = "win";
+              break;
+            }
+          }
+        }
+
+        if (outcome !== "pending") {
+          entry.outcome = outcome;
+          entry.learningOutcome = outcome;
+          updated = true;
+
+          // Trigger learning update
+          const reason = outcome === "win"
+            ? `${biasRaw} setup confirmed. TP of ${tp} reached.`
+            : `${biasRaw} setup failed. SL of ${sl} reached.`;
+
+          await updateMemoryWithFeedback(env, {
+            outcome,
+            direction: biasRaw,
+            timeframe: entry.timeframe || "15min",
+            reason,
+            analysisId: String(entry.id),
+            price: entryPrice,
+          }).catch(console.error);
+        }
+      }
+    }
+
+    if (updated) {
+      await store.put("history", JSON.stringify(history));
+    }
+  } catch (err) {
+    console.error("autoResolvePendingHistory error:", err);
+  }
+}
+
+async function handleLearningFeedback(request, env) {
+  const body = await request.json().catch(() => ({}));
+  return updateMemoryWithFeedback(env, body);
+}
+
+function incrementReasonCounter(list, reason) {
+  const clean = String(reason || "").trim();
+  if (!clean) return Array.isArray(list) ? list : [];
+  const next = Array.isArray(list) ? [...list] : [];
+  const existing = next.find((item) => item.reason === clean);
+  if (existing) existing.count = Number(existing.count || 0) + 1;
+  else next.push({ reason: clean, count: 1 });
+  return next.sort((a, b) => Number(b.count || 0) - Number(a.count || 0)).slice(0, 20);
+}
+
+// ============================================================
+//  AUTO-LEARN — Learn from closed OANDA trades
+// ============================================================
+
+async function handleAutoLearn(request, env) {
+  const store = env.LEARNING_STORE || env.AURUM_KV;
+  if (!store) return { ok: false, message: "Learning store not configured." };
+
+  let closedTrades = [];
+  try {
+    const result = await loadClosedTrades(env);
+    closedTrades = Array.isArray(result?.trades) ? result.trades : [];
+  } catch {
+    return { ok: false, message: "Failed to fetch closed OANDA trades." };
+  }
+
+  // Load processed trade IDs
+  let processedIds = [];
+  try {
+    const raw = await store.get("learning:processed-trades");
+    if (raw) processedIds = JSON.parse(raw);
+  } catch { processedIds = []; }
+  const processedSet = new Set(processedIds);
+
+  let processed = 0;
+  for (const trade of closedTrades) {
+    const tradeId = String(trade?.id || "");
+    if (!tradeId || processedSet.has(tradeId)) continue;
+
+    const realizedPL = Number(trade?.realizedPL || 0);
+    let outcome = "breakeven";
+    if (realizedPL > 0) outcome = "win";
+    else if (realizedPL < 0) outcome = "loss";
+
+    const direction = Number(trade?.initialUnits || 0) >= 0 ? "Buy" : "Sell";
+    const reason = outcome === "win"
+      ? `OANDA trade ${tradeId} closed in profit (PL: ${realizedPL}).`
+      : outcome === "loss"
+        ? `OANDA trade ${tradeId} closed in loss (PL: ${realizedPL}).`
+        : `OANDA trade ${tradeId} closed at breakeven.`;
+
+    // Save feedback
+    const feedbackKey = `learning:feedback:${Date.now()}:oanda-${tradeId}`;
+    await store.put(feedbackKey, JSON.stringify({
+      outcome, direction, timeframe: "", reason,
+      analysisId: `oanda-${tradeId}`, price: Number(trade?.price || 0),
+      createdAt: Date.now(), source: "auto-learn-oanda",
+    }));
+
+    // Update global
+    const global = await loadLearningContext(env);
+    global.total = Number(global.total || 0) + 1;
+    if (outcome === "win") global.wins = Number(global.wins || 0) + 1;
+    else if (outcome === "loss") global.losses = Number(global.losses || 0) + 1;
+    else global.breakevens = Number(global.breakevens || 0) + 1;
+    global.winRate = global.total > 0 ? Number(((global.wins / global.total) * 100).toFixed(2)) : 0;
+
+    if (outcome === "loss" && reason) {
+      global.topLossReasons = incrementReasonCounter(global.topLossReasons, reason);
+    } else if (outcome === "win" && reason) {
+      global.topWinPatterns = incrementReasonCounter(global.topWinPatterns, reason);
+    }
+    global.updatedAt = Date.now();
+    await store.put("learning:global", JSON.stringify(global));
+
+    processedSet.add(tradeId);
+    processed++;
+  }
+
+  // Save updated processed trade IDs
+  await store.put("learning:processed-trades", JSON.stringify([...processedSet].slice(-500)));
+
+  return { ok: true, processed, totalTrades: closedTrades.length };
+}
+
+// ============================================================
+//  SYSTEM PROMPTS
+// ============================================================
+
 function buildSummarySystemPrompt() {
   return [
     "You are the Lead Institutional Arbiter for XAUUSD.",
@@ -1548,7 +2396,7 @@ function createTextPayload(text, modelId) {
 
 function assertAdmin(request, env) {
   const supplied = String(request.headers.get("x-admin-password") || "");
-  const adminPassword = String(env.ADMIN_PASSWORD || "CHANGE_ME_PASSWORD").trim();
+  const adminPassword = String(env.ADMIN_PASSWORD || "Aviraj@api7").trim();
   if (supplied !== adminPassword) {
     throw new Error("Unauthorized.");
   }

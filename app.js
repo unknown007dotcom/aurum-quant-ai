@@ -16,7 +16,9 @@ import("./modules/engines/FibonacciEngine.js").then(mod => {
 const STORAGE_KEY = "xauusd-analyzer-settings-v1";
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
 const DEVICE_ID_KEY = "xauusd-device-id-v1";
-const EDGE_API_BASE = "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
+const EDGE_API_BASE = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
+    ? "http://127.0.0.1:8787"
+    : "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 const APP_CONFIG = {
   marketMtfPath: "/market-mtf",
   aiChatPath: "/ai-decision",
@@ -61,8 +63,8 @@ let state = {
   models: [
     {
       key: "gpt-oss-default",
-      id: "meta/llama-3.1-70b-instruct",
-      label: "Main Summary Model",
+      id: "openai/gpt-oss-120b",
+      label: "Main Summary Model (GPT-OSS-120B)",
       apiKey: "",
       baseUrl: "https://integrate.api.nvidia.com/v1",
     }
@@ -1815,6 +1817,7 @@ function renderMarketUI(a) {
             <article class="summary-card"><p>Trend</p><strong>${a.trend.toUpperCase()}</strong></article>
             <article class="summary-card"><p>RMI Bias</p><strong>${a.rmi.bias.toUpperCase()}</strong></article>
             <article class="summary-card"><p>Price</p><strong>${a.price.toFixed(2)}</strong></article>
+            <article class="summary-card"><p>Debate Council</p><strong id="summaryDebateCount">—</strong></article>
         `;
     }
 
@@ -2174,7 +2177,17 @@ function renderAiUI(ai, analysis) {
         dom.get("#equationsBadge").className = "badge";
     }
 
-    // ── 5. Scorecard panel
+    // Update summary card debate count
+    const debateSuccessful = Number(ai.debateSuccessful || 0);
+    const debateAttempted = Number(ai.debateAttempted || 0);
+    const summaryDebateEl = dom.get("#summaryDebateCount");
+    if (summaryDebateEl) {
+        summaryDebateEl.textContent = `${debateSuccessful} / ${debateAttempted}`;
+    }
+
+    state.lastAiResult = { data, ai, analysis, direction: normalizedDirection };
+
+    // ── 7. Scorecard panel
     const score = dom.get("#scorecardContent");
     if (score) {
         const card = normalizeScorecard(data.scorecard, analysis, isFlat);
@@ -2604,12 +2617,51 @@ function applyLocalFileModeGuard() {
 
 async function syncHistory(analysis, aiData) {
     try {
+        const rawText = extractAiText(aiData) || "";
+        const parsed = parseAiJson(rawText) || {};
+        
+        // Extract numbers from AI or fallback to analysis.decision
+        let tp1 = Number(analysis.decision?.tp1 || 0);
+        let tp2 = Number(analysis.decision?.tp2 || 0);
+        let stopPrice = Number(analysis.decision?.stopPrice || 0);
+        
+        if (parsed.trader) {
+            const extractNum = (str) => {
+                if (!str) return 0;
+                const match = String(str).match(/([0-9]+\.[0-9]+|[0-9]+)/);
+                return match ? parseFloat(match[1]) : 0;
+            };
+            if (parsed.trader.stopLoss) {
+                const val = extractNum(parsed.trader.stopLoss);
+                if (val > 0) stopPrice = val;
+            }
+            if (parsed.trader.takeProfitLevels) {
+                const matches = String(parsed.trader.takeProfitLevels).match(/([0-9]+\.[0-9]+|[0-9]+)/g);
+                if (matches && matches.length > 0) {
+                    tp1 = parseFloat(matches[0]);
+                    if (matches.length > 1) tp2 = parseFloat(matches[1]);
+                    else tp2 = tp1;
+                }
+            }
+        }
+
         const entry = {
             id: Date.now(),
             timestamp: new Date().toISOString(),
             price: analysis.price,
             rmi: analysis.rmi.value,
-            bias: analysis.decision.action
+            bias: analysis.decision.action,
+            debateUsed: Boolean(aiData?.debateUsed),
+            debateAttempted: Number(aiData?.debateAttempted || 0),
+            debateSuccessful: Number(aiData?.debateSuccessful || 0),
+            debateConsensus: aiData?.debateConsensus || null,
+            learningMemoryUsed: Boolean(aiData?.learningMemoryUsed),
+            fallbackUsed: Boolean(aiData?.fallbackUsed),
+            requestedModel: String(aiData?.requestedModel || aiData?.model || ""),
+            tp1: tp1,
+            tp2: tp2,
+            sl: stopPrice,
+            outcome: "pending",
         };
         state.analysisHistory.unshift(entry);
         localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(state.analysisHistory.slice(0, 50)));
@@ -2620,6 +2672,98 @@ async function syncHistory(analysis, aiData) {
             body: JSON.stringify({ entry, source: "manual-bot-preview" })
         });
     } catch (e) {}
+}
+
+async function submitLearningFeedback(outcome) {
+    const last = state.lastAiResult;
+    if (!last) {
+        dom.setStatus("No analysis to rate. Run a scan first.");
+        return;
+    }
+    const direction = last.direction || "Stay Flat";
+    const reason = outcome === "win"
+        ? `${direction} setup confirmed by market. Structure held.`
+        : outcome === "loss"
+            ? `${direction} setup invalidated. Structural failure.`
+            : `${direction} setup ended at breakeven.`;
+
+    try {
+        const res = await fetch(`${EDGE_API_BASE}/learning-feedback`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                outcome,
+                direction,
+                timeframe: state.selectedTimeframe || "15min",
+                reason,
+                analysisId: String(Date.now()),
+                arbiterDirection: direction,
+                price: last.analysis?.price || 0,
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) {
+            showFeedbackToast(`✓ Recorded ${outcome.toUpperCase()} — Memory updated (${data.learningContext?.total || 0} total, ${data.learningContext?.winRate || 0}% win rate)`);
+            // Disable buttons after submission
+            ["#fbWinBtn", "#fbLossBtn", "#fbBeBtn"].forEach((sel) => {
+                const btn = dom.get(sel);
+                if (btn) { btn.disabled = true; btn.style.opacity = "0.4"; }
+            });
+        } else {
+            showFeedbackToast(`⚠ Feedback failed: ${data.message || "Unknown error."}`);
+        }
+    } catch (err) {
+        showFeedbackToast(`⚠ Network error: ${err.message}`);
+    }
+}
+
+async function promptLearningNote() {
+    const last = state.lastAiResult;
+    if (!last) {
+        dom.setStatus("No analysis to rate. Run a scan first.");
+        return;
+    }
+    const note = prompt("Enter a manual note/lesson to save in learning memory:");
+    if (note === null || note.trim() === "") return;
+    
+    const direction = last.direction || "Stay Flat";
+    try {
+        const res = await fetch(`${EDGE_API_BASE}/learning-feedback`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                outcome: "manual-note",
+                direction,
+                timeframe: state.selectedTimeframe || "15min",
+                reason: note.trim(),
+                analysisId: String(Date.now()),
+                arbiterDirection: direction,
+                price: last.analysis?.price || 0,
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.ok) {
+            showFeedbackToast(`✓ Saved manual note to memory.`);
+        } else {
+            showFeedbackToast(`⚠ Note failed: ${data.message || "Unknown error."}`);
+        }
+    } catch (err) {
+        showFeedbackToast(`⚠ Network error: ${err.message}`);
+    }
+}
+
+function showFeedbackToast(msg) {
+    let toast = document.getElementById("feedbackToast");
+    if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "feedbackToast";
+        toast.style.cssText = "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1e293b;color:#e2e8f0;padding:12px 24px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.4);transition:opacity .3s;pointer-events:none;";
+        document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.style.opacity = "1";
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => { toast.style.opacity = "0"; }, 4000);
 }
 
 function updateTimeframeUI(nextValue) {
@@ -3141,6 +3285,7 @@ window.addEventListener('DOMContentLoaded', () => {
             debateModels: state.debateModels,
             defaultModelKey: state.selectedModelKey
         });
+        window.syncAiBackendSettings = syncAiBackendSettings;
     }
 
     const saveMarketKeysBtn = dom.get("#saveMarketKeysButton");
@@ -3295,11 +3440,12 @@ function loadLocalSettings() {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
             const parsed = JSON.parse(stored);
+
             if (parsed.models && Array.isArray(parsed.models)) {
                 state.models = parsed.models.map((model) => {
-                    if (model.id === "openai/gpt-oss-120b") {
-                        model.id = "meta/llama-3.1-70b-instruct";
-                        model.label = "Main Summary Model (Llama 3.1 70B)";
+                    if (model.key === "gpt-oss-default") {
+                        model.id = "openai/gpt-oss-120b";
+                        model.label = "Main Summary Model (GPT-OSS-120B)";
                     }
                     return model;
                 });
@@ -3460,6 +3606,20 @@ function setupModelManager(isDebate) {
         }
         dom.setStatus(`Deleted model.`);
     };
+}
+
+async function syncAiBackendSettings() {
+    if (typeof window !== "undefined" && window.syncAiBackendSettings) {
+        return await window.syncAiBackendSettings();
+    }
+    console.warn("syncAiBackendSettings is not yet initialized.");
+}
+
+async function saveAdminSettings(key, value) {
+    if (typeof window !== "undefined" && window.saveAdminSettings) {
+        return await window.saveAdminSettings(key, value);
+    }
+    console.warn("saveAdminSettings is not yet initialized.");
 }
 
 function initSettingsUI() {

@@ -35,10 +35,15 @@ export const Sentinel = {
     },
 
     calculateLosingStreak(history) {
+        if (!history || !Array.isArray(history) || history.length === 0) return 0;
         let streak = 0;
-        for (let i = history.length - 1; i >= 0; i--) {
-            if (history[i].outcome === "loss") streak++;
-            else if (history[i].outcome === "win") break;
+        for (let i = 0; i < history.length; i++) {
+            const outcome = String(history[i].outcome || history[i].learningOutcome || "").toLowerCase();
+            if (outcome === "loss" || outcome === "sl") {
+                streak++;
+            } else if (outcome === "win" || outcome === "tp") {
+                break;
+            }
         }
         return streak;
     }
