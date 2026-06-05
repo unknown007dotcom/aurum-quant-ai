@@ -91,7 +91,11 @@ let state = {
 
 function apiUrl(path) {
   const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${String(path || "")}`;
-  return `/api${cleanPath}`;
+  if (cleanPath.startsWith("/settings") || cleanPath.startsWith("/ai-decision") || cleanPath.startsWith("/auto-learn")) {
+    return `/api${cleanPath}`;
+  }
+  const cleanBase = String(EDGE_API_BASE || "").replace(/\/+$/, "");
+  return `${cleanBase}${cleanPath}`;
 }
 
 const TIMEFRAME_TO_TRADINGVIEW = {
@@ -821,19 +825,8 @@ const LiquidityEngine = {
             const childCandles = this._getChildCandles(mtfData, pool.childTf);
             if (!childCandles || !childCandles.length) continue;
 
-            // Limit lookback to current period only to avoid stale historical sweeps
-            let maxLookback;
-            if (pool.parent === "Monthly" || pool.parent === "Quarterly") {
-                maxLookback = Math.min(8, childCandles.length);   // ~2 months of weekly candles
-            } else if (pool.parent === "Weekly") {
-                maxLookback = Math.min(7, childCandles.length);    // 1 week of daily candles
-            } else if (pool.parent === "Daily") {
-                maxLookback = Math.min(12, childCandles.length);   // 2 days of 4H candles
-            } else if (pool.parent === "Session") {
-                maxLookback = Math.min(24, childCandles.length);   // Current session of 1H candles
-            } else {
-                maxLookback = Math.min(20, childCandles.length);   // Inducement / default
-            }
+            // Scan all available child candles to find any sweeps/breakouts since formation
+            let maxLookback = childCandles.length;
 
             // Determine the index of the latest completed candle from the end
             let latestCompletedIdx = 1;
@@ -1590,47 +1583,59 @@ async function runAnalysis() {
         const symbol = encodeURIComponent(state.botInstrument || "XAU_USD");
 
         // --- Step 1: Fetch market data ---
+        // PRIMARY: Hit the Cloudflare Worker (which uses KV-cached candle data from OANDA)
+        // FALLBACK: Hit the local Node.js server (which fetches directly from OANDA, no KV cache)
         let res, mtfData;
-        const fetchUrl = apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`);
+        const queryParams = `symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
+        const cloudflareUrl = `${EDGE_API_BASE}${APP_CONFIG.marketMtfPath}?${queryParams}`;
+        const localFallbackUrl = `/api${APP_CONFIG.marketMtfPath}?${queryParams}`;
         let fetchSuccess = false;
         let primaryErrMessage = "";
+        let dataSource = "";
 
+        // --- Attempt 1: Cloudflare Worker (has KV edge cache with growing candle history) ---
         try {
-            res = await fetch(fetchUrl);
+            res = await fetch(cloudflareUrl);
             if (res.ok) {
                 mtfData = await res.json().catch(() => ({}));
                 if (mtfData && Array.isArray(mtfData.data)) {
                     fetchSuccess = true;
+                    dataSource = `Cloudflare KV (${res.headers.get("X-Cache") || "LIVE"})`;
                 } else {
-                    primaryErrMessage = "Malformed data payload (missing data array)";
+                    primaryErrMessage = "Cloudflare: Malformed data payload (missing data array)";
                 }
             } else {
                 const errPayload = await res.json().catch(() => ({}));
-                primaryErrMessage = `HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
+                primaryErrMessage = `Cloudflare HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
             }
         } catch (fetchErr) {
-            primaryErrMessage = fetchErr.message;
+            primaryErrMessage = `Cloudflare: ${fetchErr.message}`;
         }
 
+        // --- Attempt 2: Local server fallback (direct OANDA fetch, no KV cache) ---
         if (!fetchSuccess) {
-            console.warn(`Cloudflare backend failed (${primaryErrMessage}). Retrying with local Vercel API fallback...`);
-            const fallbackUrl = `/api${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
+            console.warn(`Cloudflare Worker failed (${primaryErrMessage}). Falling back to local server...`);
             try {
-                res = await fetch(fallbackUrl);
+                res = await fetch(localFallbackUrl);
                 if (res.ok) {
                     mtfData = await res.json().catch(() => ({}));
                     if (mtfData && Array.isArray(mtfData.data)) {
                         fetchSuccess = true;
+                        dataSource = "Local Server (OANDA Direct)";
                     } else {
-                        primaryErrMessage += ` | Fallback: Malformed data payload`;
+                        primaryErrMessage += ` | Local: Malformed data payload`;
                     }
                 } else {
                     const errPayload = await res.json().catch(() => ({}));
-                    primaryErrMessage += ` | Fallback: HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
+                    primaryErrMessage += ` | Local HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
                 }
             } catch (fallbackErr) {
-                primaryErrMessage += ` | Fallback Error: ${fallbackErr.message}`;
+                primaryErrMessage += ` | Local: ${fallbackErr.message}`;
             }
+        }
+
+        if (fetchSuccess) {
+            console.log(`✅ Market data loaded from: ${dataSource}`);
         }
 
         if (!fetchSuccess) {
@@ -1674,7 +1679,7 @@ async function runAnalysis() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 90000);
         try {
-            aiRes = await fetch(apiUrl(APP_CONFIG.aiChatPath), {
+            aiRes = await fetch(`${EDGE_API_BASE}${APP_CONFIG.aiChatPath}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1902,13 +1907,14 @@ function renderLiquidityEventBox(events) {
     const filterSelect = dom.get("#eventFilterSelect");
     let filterVal = filterSelect ? filterSelect.value : "all";
     
-    let filteredEvents = events;
-    if (filterVal === "sweep") filteredEvents = events.filter(e => e.type === "SWEEP" || e.type === "SWEPT");
-    else if (filterVal === "breakout") filteredEvents = events.filter(e => e.type === "BREAKOUT" || e.type === "BROKEN");
-    else if (filterVal === "extreme") filteredEvents = events.filter(e => e.pool?.tier === "extreme");
-    else if (filterVal === "midExtreme") filteredEvents = events.filter(e => e.pool?.tier === "midExtreme");
-    else if (filterVal === "decisional") filteredEvents = events.filter(e => e.pool?.tier === "decisional");
-    else if (filterVal === "inducement") filteredEvents = events.filter(e => e.pool?.tier === "inducement");
+    // Only display active (non-dead/non-historical) events in the confirmed events alert box
+    let filteredEvents = events.filter(e => !e._dead);
+    if (filterVal === "sweep") filteredEvents = filteredEvents.filter(e => e.type === "SWEEP" || e.type === "SWEPT");
+    else if (filterVal === "breakout") filteredEvents = filteredEvents.filter(e => e.type === "BREAKOUT" || e.type === "BROKEN");
+    else if (filterVal === "extreme") filteredEvents = filteredEvents.filter(e => e.pool?.tier === "extreme");
+    else if (filterVal === "midExtreme") filteredEvents = filteredEvents.filter(e => e.pool?.tier === "midExtreme");
+    else if (filterVal === "decisional") filteredEvents = filteredEvents.filter(e => e.pool?.tier === "decisional");
+    else if (filterVal === "inducement") filteredEvents = filteredEvents.filter(e => e.pool?.tier === "inducement");
 
     if (filteredEvents.length === 0) {
         container.innerHTML = `<div class="liquidity-event-box"><div class="event-header"><span class="event-emoji">⏳</span><span class="event-title">No Matching Events</span></div><p style="color:var(--muted);font-size:0.85rem;margin:0.5rem 0 0;">No events match the selected filter criteria.</p></div>`;
@@ -2608,7 +2614,7 @@ async function syncHistory(analysis, aiData) {
         state.analysisHistory.unshift(entry);
         localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(state.analysisHistory.slice(0, 50)));
         
-        await fetch(apiUrl(APP_CONFIG.historyLogPath), {
+        await fetch(`${EDGE_API_BASE}${APP_CONFIG.historyLogPath}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ entry, source: "manual-bot-preview" })
@@ -2701,7 +2707,7 @@ function renderClosedTrades(trades) {
 
 let lastAlertTick = 0;
 async function refreshBotStatus() {
-    const response = await fetch(apiUrl(APP_CONFIG.botStatusPath), { cache: "no-store" });
+    const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.botStatusPath}`, { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
         throw new Error(payload.message || `Bot status failed (${response.status})`);
@@ -2725,7 +2731,7 @@ async function refreshBotStatus() {
 }
 
 async function sendBotCommand(action, extra = {}) {
-    const response = await fetch(apiUrl(APP_CONFIG.botControlPath), {
+    const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.botControlPath}`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -2805,11 +2811,14 @@ async function runLiquidityScanSilent() {
     try {
         const symbol = encodeURIComponent(state.botInstrument || "XAU_USD");
         let res, mtfData;
-        const fetchUrl = apiUrl(`${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`);
+        const queryParams = `symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
+        const cloudflareUrl = `${EDGE_API_BASE}${APP_CONFIG.marketMtfPath}?${queryParams}`;
+        const localFallbackUrl = `/api${APP_CONFIG.marketMtfPath}?${queryParams}`;
         let fetchSuccess = false;
 
+        // Attempt 1: Cloudflare Worker (KV-cached candle data)
         try {
-            res = await fetch(fetchUrl);
+            res = await fetch(cloudflareUrl);
             if (res.ok) {
                 mtfData = await res.json().catch(() => ({}));
                 if (mtfData && Array.isArray(mtfData.data)) {
@@ -2817,13 +2826,13 @@ async function runLiquidityScanSilent() {
                 }
             }
         } catch (e) {
-            // Ignore primary error and try fallback
+            // Cloudflare failed, try local fallback
         }
 
+        // Attempt 2: Local server fallback (direct OANDA, no KV cache)
         if (!fetchSuccess) {
-            const fallbackUrl = `/api${APP_CONFIG.marketMtfPath}?symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
             try {
-                res = await fetch(fallbackUrl);
+                res = await fetch(localFallbackUrl);
                 if (res.ok) {
                     mtfData = await res.json().catch(() => ({}));
                     if (mtfData && Array.isArray(mtfData.data)) {
@@ -2998,7 +3007,7 @@ window.addEventListener('DOMContentLoaded', () => {
     // --- Wire Admin Settings API ---
     async function loadAdminSettings() {
         try {
-            const response = await fetch(apiUrl(APP_CONFIG.settingsPath), { headers: { 'x-admin-password': SETTINGS_PASSWORD } });
+            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': SETTINGS_PASSWORD } });
             const data = await response.json();
             if (!data.isAdmin) {
                 dom.setStatus("Backend admin auth mismatch. Settings are loading in read-only mode.");
@@ -3101,7 +3110,7 @@ window.addEventListener('DOMContentLoaded', () => {
     async function saveAdminSettings(key, value) {
         try {
             const body = typeof key === "object" ? key : { [key]: value };
-            const response = await fetch(apiUrl(APP_CONFIG.settingsPath), {
+            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, {
                 method: 'POST',
                 headers: { 'x-admin-password': SETTINGS_PASSWORD, 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -3240,7 +3249,7 @@ window.addEventListener('DOMContentLoaded', () => {
         if (!hint || !grid) return;
         
         try {
-            const response = await fetch(apiUrl(`${APP_CONFIG.settingsPath}?action=metrics`), { 
+            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}?action=metrics`, { 
                 headers: { 'x-admin-password': SETTINGS_PASSWORD } 
             });
             const data = await response.json();
@@ -3532,7 +3541,7 @@ function initSettingsUI() {
         importNvidiaBtn.disabled = true;
         setSettingsStatus("Fetching NVIDIA models...");
         try {
-            const res = await fetch(apiUrl(`${APP_CONFIG.settingsPath}?action=fetch-nvidia`), {
+            const res = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}?action=fetch-nvidia`, {
                 method: 'POST',
                 headers: { 'x-admin-password': SETTINGS_PASSWORD, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ apiKey, baseUrl })

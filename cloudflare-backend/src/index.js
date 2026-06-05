@@ -118,9 +118,16 @@ async function fetchCandlesWithCache(env, options = {}) {
 
   // 2. Cache is stale or missing -> Fetch fresh rolling window from OANDA
   // To grow the history, we always request the fresh rolling window (the count requested, up to 2500)
-  const freshCandles = await fetchCandles(env, { instrument, timeframe, count });
+  let freshCandles = [];
+  let fetchFailed = false;
+  try {
+    freshCandles = await fetchCandles(env, { instrument, timeframe, count });
+  } catch (err) {
+    console.error(`OANDA fetch failed for ${timeframe}:`, err.message || err);
+    fetchFailed = true;
+  }
 
-  if (Array.isArray(freshCandles) && freshCandles.length > 0) {
+  if (!fetchFailed && Array.isArray(freshCandles) && freshCandles.length > 0) {
     // 3. Merge new candles into the permanent cached history (avoiding duplicate datetimes)
     const mergedMap = new Map();
     
@@ -168,12 +175,16 @@ async function fetchCandlesWithCache(env, options = {}) {
     };
   }
 
-  // Fallback to whatever is cached if OANDA fetch failed
+  // Fallback to whatever is cached if OANDA fetch failed or returned empty
   if (cachedCandles.length > 0) {
     return {
       source: "KV_CACHE_FALLBACK",
       candles: cachedCandles
     };
+  }
+
+  if (fetchFailed) {
+    throw new Error(`OANDA fetch failed and no cached candles available for ${timeframe}.`);
   }
 
   return { source: "OANDA_LIVE", candles: freshCandles };
