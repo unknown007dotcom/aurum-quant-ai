@@ -102,12 +102,15 @@ async function handleFetchNvidia(body, res) {
 
 function pickNvidiaSmokeTestModel(models) {
   const list = Array.isArray(models) ? models : [];
+  // Prefer smaller models for smoke test — gpt-oss-120b returns empty content
+  // with low max_tokens causing false key-validation failures.
   const preferred = [
     "meta/llama-3.1-8b-instruct",
+    "mistralai/mistral-7b-instruct-v0.3",
     "meta/llama-3.1-70b-instruct",
     "meta/llama-3.3-70b-instruct",
     "openai/gpt-oss-20b",
-    "mistralai/mistral-7b-instruct-v0.3",
+    "openai/gpt-oss-120b",
   ];
   return preferred.map((id) => list.find((model) => model.id === id)).find(Boolean) ||
     list.find((model) => /(?:instruct|chat|gpt-oss)/i.test(model.id));
@@ -124,21 +127,31 @@ async function validateNvidiaChatAccess({ apiKey, baseUrl, modelId, signal }) {
       },
       body: JSON.stringify({
         model: modelId,
-        temperature: 0,
-        max_tokens: 4,
+        temperature: 0.1,
+        // Use 32 tokens — 4 was too low and caused NVIDIA to return
+        // "model output must contain either output text or tool calls"
+        // which incorrectly failed key validation.
+        max_tokens: 32,
         stream: false,
         messages: [
-          { role: "user", content: "Reply OK." },
+          { role: "system", content: "You are a helpful assistant. Always respond with a short text answer." },
+          { role: "user", content: "Say the word 'OK' and nothing else." },
         ],
       }),
       signal,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      const errMsg = payload?.error?.message || payload?.message || `NVIDIA chat validation HTTP ${response.status}`;
+      // If we get the "empty output" error, the key itself is valid —
+      // the model just returned no tokens. Treat this as success.
+      if (/model output must contain|output text or tool calls/i.test(errMsg)) {
+        return { ok: true };
+      }
       return {
         ok: false,
         statusCode: response.status,
-        message: payload?.error?.message || payload?.message || `NVIDIA chat validation HTTP ${response.status}`,
+        message: errMsg,
       };
     }
     return { ok: true };

@@ -6,7 +6,7 @@ const MIN_DEPTH = 0.10;
 // --- Debate Council & Learning Memory Constants ---
 const DEBATE_MAX_WAIT_MS = 25000;
 const SUMMARY_MAX_WAIT_MS = 35000;
-const MAX_DEBATE_MODELS = 50;
+const MAX_DEBATE_MODELS = 35;
 const DEFAULT_DEBATE_MAX_TOKENS = 750;
 const DEFAULT_SUMMARY_MAX_TOKENS = 2200;
 const ALLOWED_ORIGINS = [
@@ -625,6 +625,12 @@ async function handleAiDecision(request, env) {
       fallbackUsed: true, fallbackReason: sanitizeProviderFailureReason(reason),
       requestedModel: selectedSummary.label || selectedSummary.id,
       finalModel: selectedSummary.id,
+      debateResponses: successfulDebates.map(d => ({
+        modelLabel: d.model.modelConfig.label,
+        modelId: d.model.modelConfig.id,
+        bias: d.model.bias,
+        output: extractAiText(d.result.payload)
+      }))
     };
   }
 
@@ -641,6 +647,12 @@ async function handleAiDecision(request, env) {
     fallbackUsed: false,
     requestedModel: selectedSummary.label || selectedSummary.id,
     finalModel: selectedSummary.id,
+    debateResponses: successfulDebates.map(d => ({
+      modelLabel: d.model.modelConfig.label,
+      modelId: d.model.modelConfig.id,
+      bias: d.model.bias,
+      output: extractAiText(d.result.payload)
+    }))
   };
 }
 
@@ -1555,9 +1567,9 @@ function rebalanceModelPools(summaryModels, debateModels) {
   if (summaries.length === 0 && debates.length > 0) {
     return { summaryModels: [debates[0]], debateModels: debates.slice(1) };
   }
-  const summaryKeys = new Set(summaries.map((m) => m.key));
-  const cleanDebates = debates.filter((m) => !summaryKeys.has(m.key));
-  return { summaryModels: summaries, debateModels: cleanDebates };
+  // Allow overlap: models in the primary library can also be in the debate list.
+  // The debate pool builder dynamically excludes the active Lead Arbiter model.
+  return { summaryModels: summaries, debateModels: debates };
 }
 
 function sanitizeBaseUrl(value) {
@@ -1594,7 +1606,7 @@ function buildDebatePool(debateModels, selectedSummary, access) {
     normalizedDebates
       .filter((model) => model.id && model.apiKey)
       .filter((model) => isChatCapableModel(model.id))
-      .filter((model) => model.isDebateParticipant || model.key !== selectedSummary.key),
+      .filter((model) => model.isDebateParticipant && model.key !== selectedSummary.key),
   );
   const capped = shuffleAndCap(filtered, MAX_DEBATE_MODELS);
   return assignDebateBiasTeams(capped);

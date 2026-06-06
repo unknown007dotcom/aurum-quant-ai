@@ -2,7 +2,7 @@ const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const { getAdminSettings, getFirestore } = require("../lib/firebase-admin");
 const { getSummaryKnowledge, getDebateKnowledge } = require("../lib/smc-knowledge");
 const DEBATE_MAX_WAIT_MS = 25000;
-const MAX_DEBATE_MODELS = 6;
+const MAX_DEBATE_MODELS = 60;
 const modelCatalogCache = new Map();
 
 module.exports = async function handler(req, res) {
@@ -137,9 +137,9 @@ module.exports = async function handler(req, res) {
 
   const debateResults = await Promise.all(
     debatePool.map(async (entry, index) => {
-      // Apply a staggered start (1.5s delay per model) to avoid provider rate limits (429s)
+      // Apply a staggered start (150ms delay per model) to avoid provider rate limits (429s)
       if (index > 0) {
-        await new Promise((resolve) => setTimeout(resolve, index * 500));
+        await new Promise((resolve) => setTimeout(resolve, index * 150));
       }
       return requestAiModel({
         modelConfig: entry.modelConfig,
@@ -250,6 +250,12 @@ module.exports = async function handler(req, res) {
         debateSuccessful: successfulDebates.length,
         debateWorking: successfulDebates.length,
         debateConsensus,
+        debateResponses: successfulDebates.map(d => ({
+          modelLabel: d.model.modelConfig.label,
+          modelId: d.model.modelConfig.id,
+          bias: d.model.bias,
+          output: extractAiText(d.result.payload)
+        }))
       });
       return;
     }
@@ -264,6 +270,12 @@ module.exports = async function handler(req, res) {
       debateSuccessful: successfulDebates.length,
       debateWorking: successfulDebates.length,
       debateConsensus,
+      debateResponses: successfulDebates.map(d => ({
+        modelLabel: d.model.modelConfig.label,
+        modelId: d.model.modelConfig.id,
+        bias: d.model.bias,
+        output: extractAiText(d.result.payload)
+      }))
     });
     return;
   }
@@ -278,6 +290,12 @@ module.exports = async function handler(req, res) {
     debateSuccessful: successfulDebates.length,
     debateWorking: successfulDebates.length,
     debateConsensus,
+    debateResponses: successfulDebates.map(d => ({
+      modelLabel: d.model.modelConfig.label,
+      modelId: d.model.modelConfig.id,
+      bias: d.model.bias,
+      output: extractAiText(d.result.payload)
+    }))
   });
 };
 
@@ -367,7 +385,8 @@ function buildDebatePool(debateModels, selectedSummary) {
         model.id &&
         model.apiKey &&
         isChatCapableModel(model.id) &&
-        (model.isDebateParticipant || model.key !== selectedSummary.key),
+        model.isDebateParticipant &&
+        model.key !== selectedSummary.key,
     ),
   );
 
@@ -428,13 +447,11 @@ function rebalanceModelPools(summaryModels, debateModels) {
     return { summaryModels: [debates[0]], debateModels: debates.slice(1) };
   }
 
-  // Ensure no overlap: models in the primary library shouldn't be in the debate list
-  const summaryKeys = new Set(summaries.map(m => m.key));
-  const cleanDebates = debates.filter(m => !summaryKeys.has(m.key));
-
+  // Allow overlap: models in the primary library can also be in the debate list.
+  // The debate pool builder dynamically excludes the active Lead Arbiter model.
   return {
     summaryModels: summaries,
-    debateModels: cleanDebates,
+    debateModels: debates,
   };
 }
 
@@ -491,16 +508,35 @@ async function resolveWorkingNvidiaAccess({ summaryModels, debateModels, fallbac
   for (const candidate of candidates) {
     const catalog = await fetchNvidiaModelCatalog(candidate);
     if (catalog.ok) {
-      const validationModel = pickNvidiaSmokeTestModel(catalog.models);
+      let validationModel = pickNvidiaSmokeTestModel(catalog.models);
       if (!validationModel) {
         errors.push("NVIDIA returned a model catalog, but no chat-capable validation model was found.");
         continue;
       }
-      const smoke = await validateNvidiaChatAccess({
+      let smoke = await validateNvidiaChatAccess({
         apiKey: candidate.apiKey,
         baseUrl: candidate.baseUrl,
         modelId: validationModel.id,
       });
+      // If the chosen validation model returned an empty-output error,
+      // retry with a different preferred model before giving up on this key.
+      if (!smoke.ok && smoke.emptyOutputModel) {
+        const retryModel = pickNvidiaSmokeTestModel(catalog.models, smoke.emptyOutputModel);
+        if (retryModel) {
+          smoke = await validateNvidiaChatAccess({
+            apiKey: candidate.apiKey,
+            baseUrl: candidate.baseUrl,
+            modelId: retryModel.id,
+          });
+          if (!smoke.ok && smoke.emptyOutputModel) {
+            // Both tried models returned empty output — key is valid, accept it.
+            smoke = { ok: true };
+          }
+        } else {
+          // No alternative model to try — treat empty output as key-valid.
+          smoke = { ok: true };
+        }
+      }
       if (!smoke.ok) {
         errors.push(smoke.message || `NVIDIA chat validation failed for ${validationModel.id}.`);
         continue;
@@ -559,22 +595,28 @@ async function fetchNvidiaModelCatalog(candidate) {
   }
 }
 
-function pickNvidiaSmokeTestModel(models) {
+function pickNvidiaSmokeTestModel(models, excludeId = null) {
   const list = Array.isArray(models) ? models : [];
+  // Prefer smaller/faster models for smoke test — gpt-oss-120b can return
+  // empty content with very low max_tokens, causing false key-validation failures.
   const preferred = [
     "meta/llama-3.1-8b-instruct",
+    "mistralai/mistral-7b-instruct-v0.3",
     "meta/llama-3.1-70b-instruct",
     "meta/llama-3.3-70b-instruct",
     "openai/gpt-oss-20b",
-    "mistralai/mistral-7b-instruct-v0.3",
+    "openai/gpt-oss-120b",
   ];
-  return preferred.map((id) => list.find((model) => model.id === id)).find(Boolean) ||
-    list.find((model) => /(?:instruct|chat|gpt-oss)/i.test(model.id));
+  return preferred
+    .filter((id) => id !== excludeId)
+    .map((id) => list.find((model) => model.id === id))
+    .find(Boolean) ||
+    list.find((model) => model.id !== excludeId && /(?:instruct|chat|gpt-oss)/i.test(model.id));
 }
 
 async function validateNvidiaChatAccess({ apiKey, baseUrl, modelId }) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const response = await fetch(`${sanitizeBaseUrl(baseUrl || DEFAULT_BASE_URL)}/chat/completions`, {
       method: "POST",
@@ -585,21 +627,32 @@ async function validateNvidiaChatAccess({ apiKey, baseUrl, modelId }) {
       },
       body: JSON.stringify({
         model: modelId,
-        temperature: 0,
-        max_tokens: 4,
+        temperature: 0.1,
+        // Use 32 tokens — enough for any model to produce a short reply.
+        // 4 tokens was too low and caused NVIDIA to return the
+        // "model output must contain either output text or tool calls" error,
+        // which incorrectly failed the key validation step.
+        max_tokens: 32,
         stream: false,
         messages: [
-          { role: "user", content: "Reply OK." },
+          { role: "system", content: "You are a helpful assistant. Always respond with a short text answer." },
+          { role: "user", content: "Say the word 'OK' and nothing else." },
         ],
       }),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      const errMsg = payload?.error?.message || payload?.message || `NVIDIA chat validation HTTP ${response.status}`;
+      // Treat the "empty output" error as a key-is-valid signal.
+      // It just means this particular model returned no tokens — the key itself works.
+      if (/model output must contain|output text or tool calls/i.test(errMsg)) {
+        return { ok: true, emptyOutputModel: modelId };
+      }
       return {
         ok: false,
         statusCode: response.status,
-        message: payload?.error?.message || payload?.message || `NVIDIA chat validation HTTP ${response.status}`,
+        message: errMsg,
       };
     }
     return { ok: true };
@@ -719,53 +772,92 @@ async function requestFirstAvailableSummary({ summaryModels, extraModels, skipKe
 }
 
 async function requestAiModel({ modelConfig, prompt, temperature, systemPrompt, maxTokens }, options = {}) {
-  const controller = new AbortController();
   const modelId = String(modelConfig?.id || "");
-  const timeoutMs = Number(options.timeoutMs) > 0
-    ? Number(options.timeoutMs)
-    : modelId.includes("gemma")
-      ? 40000
-      : 25000;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const maxAttempts = 2;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeoutMs = Number(options.timeoutMs) > 0
+      ? Number(options.timeoutMs)
+      : modelId.includes("gemma")
+        ? 40000
+        : 25000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const upstreamResponse = await fetch(`${sanitizeBaseUrl(modelConfig.baseUrl || DEFAULT_BASE_URL)}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${modelConfig.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: modelId,
-        temperature,
-        max_tokens: maxTokens,
-        stream: false,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: prompt },
-        ],
-      }),
-      signal: controller.signal,
-    });
+    try {
+      const upstreamResponse = await fetch(`${sanitizeBaseUrl(modelConfig.baseUrl || DEFAULT_BASE_URL)}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${modelConfig.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          temperature,
+          max_tokens: maxTokens,
+          stream: false,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt },
+          ],
+        }),
+        signal: controller.signal,
+      });
 
-    const payload = await upstreamResponse.json().catch(() => ({}));
-    if (!upstreamResponse.ok) {
-      return {
-        ok: false,
-        statusCode: upstreamResponse.status,
-        message: payload?.error?.message || payload?.message || `AI HTTP ${upstreamResponse.status}`,
-      };
+      const payload = await upstreamResponse.json().catch(() => ({}));
+      
+      // If we get rate limited (429) or transient server errors (5xx), wait and retry
+      if (upstreamResponse.status === 429 || upstreamResponse.status >= 500) {
+        if (attempt < maxAttempts) {
+          clearTimeout(timeout);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          continue;
+        }
+      }
+
+      if (!upstreamResponse.ok) {
+        const errMsg = payload?.error?.message || payload?.message || `AI HTTP ${upstreamResponse.status}`;
+        // If the NVIDIA API returns the "empty output" error, the model produced
+        // no tokens. This is a model-level issue.
+        if (/model output must contain|output text or tool calls/i.test(errMsg)) {
+          return {
+            ok: false,
+            statusCode: 422,
+            message: `Model "${modelId}" returned an empty response (no output tokens). Try a different model or increase max_tokens.`,
+          };
+        }
+        return {
+          ok: false,
+          statusCode: upstreamResponse.status,
+          message: errMsg,
+        };
+      }
+
+      // Guard: NVIDIA sometimes returns HTTP 200 but with empty content.
+      const responseText = payload?.choices?.[0]?.message?.content;
+      if (upstreamResponse.ok && (responseText === null || responseText === "")) {
+        return {
+          ok: false,
+          statusCode: 422,
+          message: `Model "${modelId}" returned an HTTP 200 but with empty content. Try a different model.`,
+        };
+      }
+
+      return { ok: true, payload };
+    } catch (error) {
+      if (attempt < maxAttempts) {
+        clearTimeout(timeout);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        continue;
+      }
+      if (error?.name === "AbortError") {
+        return { ok: false, statusCode: 504, message: `Provider timeout for model ${modelId}.` };
+      }
+      return { ok: false, statusCode: 502, message: error?.message || `AI request failed for ${modelId}.` };
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return { ok: true, payload };
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      return { ok: false, statusCode: 504, message: `Provider timeout for model ${modelId}.` };
-    }
-    return { ok: false, statusCode: 502, message: error?.message || `AI request failed for ${modelId}.` };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

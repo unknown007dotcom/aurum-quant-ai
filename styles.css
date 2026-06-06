@@ -2693,3 +2693,126 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Debate Council Modal Styles */
+.debate-modal-layout {
+  display: flex;
+  gap: 20px;
+  height: 480px;
+  max-height: 70vh;
+}
+
+.debate-models-sidebar {
+  width: 260px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  padding-right: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.debate-model-item {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.debate-model-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.debate-model-item.active {
+  background: rgba(240, 195, 106, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(240, 195, 106, 0.1);
+}
+
+.debate-model-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.debate-model-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  width: fit-content;
+  font-weight: bold;
+}
+
+.debate-model-badge.bullish {
+  background: rgba(116, 219, 178, 0.15);
+  color: var(--mint);
+}
+
+.debate-model-badge.bearish {
+  background: rgba(255, 107, 107, 0.15);
+  color: #ff6b6b;
+}
+
+.debate-model-badge.balanced,
+.debate-model-badge.both {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.debate-model-badge.redteam {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.debate-content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.debate-output-box {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 14px;
+  padding: 16px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: #dce8ff;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 600px) {
+  .debate-modal-layout {
+    flex-direction: column;
+    height: auto;
+    max-height: 80vh;
+  }
+  .debate-models-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-right: 0;
+    padding-bottom: 12px;
+    flex-direction: row;
+    overflow-x: auto;
+    height: auto;
+    max-height: 120px;
+  }
+  .debate-model-item {
+    min-width: 160px;
+    flex-shrink: 0;
+  }
+}

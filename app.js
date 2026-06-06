@@ -17,7 +17,7 @@ const STORAGE_KEY = "xauusd-analyzer-settings-v1";
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
 const DEVICE_ID_KEY = "xauusd-device-id-v1";
 const EDGE_API_BASE = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
-    ? "http://127.0.0.1:8787"
+    ? (window.location.port === "3000" ? "/api" : "http://127.0.0.1:8787")
     : "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 const APP_CONFIG = {
   marketMtfPath: "/market-mtf",
@@ -1817,8 +1817,12 @@ function renderMarketUI(a) {
             <article class="summary-card"><p>Trend</p><strong>${a.trend.toUpperCase()}</strong></article>
             <article class="summary-card"><p>RMI Bias</p><strong>${a.rmi.bias.toUpperCase()}</strong></article>
             <article class="summary-card"><p>Price</p><strong>${a.price.toFixed(2)}</strong></article>
-            <article class="summary-card"><p>Debate Council</p><strong id="summaryDebateCount">—</strong></article>
+            <article id="summaryDebateCard" class="summary-card" style="cursor: pointer;"><p>Debate Council ↗</p><strong id="summaryDebateCount">—</strong></article>
         `;
+        const debateCard = dom.get("#summaryDebateCard");
+        if (debateCard) {
+            debateCard.onclick = () => showDebateCouncilModal();
+        }
     }
 
     // Three Equations Doctrine Bind
@@ -3011,6 +3015,7 @@ async function runLiquidityScanSilent() {
 window.addEventListener('DOMContentLoaded', () => {
     console.log("Aurum OS Consolidated Booted.");
     setupTrackerModal();
+    setupDebateCouncilModal();
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
         Notification.requestPermission();
     }
@@ -3163,38 +3168,82 @@ window.addEventListener('DOMContentLoaded', () => {
             if (dom.get("#globalNvidiaApiKeysInput")) dom.get("#globalNvidiaApiKeysInput").value = Array.isArray(settings.globalNvidiaApiKeys) && settings.globalNvidiaApiKeys.length ? settings.globalNvidiaApiKeys.join("\n") : (settings.globalNvidiaApiKey || "");
             if (dom.get("#oandaApiTokenInput")) dom.get("#oandaApiTokenInput").value = settings.oandaApiToken || "";
             if (dom.get("#oandaAccountIdInput")) dom.get("#oandaAccountIdInput").value = settings.oandaAccountId || "";
+            const permittedModels = new Set([
+                "meta/llama-3.1-8b-instruct",
+                "meta/llama-3.3-70b-instruct",
+                "abacusai/dracarys-llama-3.1-70b-instruct",
+                "meta/llama-4-maverick-17b-128e-instruct",
+                "mistralai/mistral-nemotron",
+                "nvidia/llama-3.3-nemotron-super-49b-v1",
+                "google/gemma-3n-e2b-it",
+                "google/gemma-3n-e4b-it",
+                "meta/llama-3.2-3b-instruct",
+                "mistralai/ministral-14b-instruct-2512",
+                "mistralai/mistral-large-3-675b-instruct-2512",
+                "mistralai/mistral-medium-3.5-128b",
+                "mistralai/mistral-small-4-119b-2603",
+                "mistralai/mixtral-8x7b-instruct-v0.1",
+                "nvidia/llama-3.1-nemotron-nano-8b-v1",
+                "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-mini-4b-instruct",
+                "nvidia/nemotron-nano-12b-v2-vl",
+                "qwen/qwen3-coder-480b-a35b-instruct",
+                "qwen/qwen3.5-397b-a17b",
+                "stockmark/stockmark-2-100b-instruct",
+                "upstage/solar-10.7b-instruct",
+                "bytedance/seed-oss-36b-instruct",
+                "deepseek-ai/deepseek-v4-flash",
+                "deepseek-ai/deepseek-v4-pro",
+                "google/gemma-4-31b-it",
+                "meta/llama-3.1-70b-instruct",
+                "meta/llama-3.2-1b-instruct",
+                "microsoft/phi-4-mini-instruct",
+                "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+                "nvidia/nemotron-3-ultra-550b-a55b",
+                "qwen/qwen3-next-80b-a3b-instruct",
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "nvidia/nvidia-nemotron-nano-9b-v2",
+                "nvidia/nemotron-3-nano-30b-a3b"
+            ]);
+
             if (Array.isArray(settings.nvidiaModels) && settings.nvidiaModels.length) {
-                state.models = settings.nvidiaModels.map((model) => {
-                    let modelId = model.id;
-                    let label = model.label;
-                    if (modelId === "openai/gpt-oss-120b") {
-                        modelId = "meta/llama-3.1-70b-instruct";
-                        label = "Main Summary Model (Llama 3.1 70B)";
-                    }
-                    return {
-                        key: model.key,
-                        id: modelId,
-                        label: label,
-                        apiKey: model.apiKey || "",
-                        baseUrl: model.baseUrl || APP_CONFIG.defaultBaseUrl
-                    };
-                });
+                state.models = settings.nvidiaModels
+                    .filter((model) => permittedModels.has(String(model.id || "").trim()))
+                    .map((model) => {
+                        let modelId = model.id;
+                        let label = model.label;
+                        if (modelId === "openai/gpt-oss-120b") {
+                            modelId = "meta/llama-3.1-70b-instruct";
+                            label = "Main Summary Model (Llama 3.1 70B)";
+                        }
+                        return {
+                            key: model.key,
+                            id: modelId,
+                            label: label,
+                            apiKey: model.apiKey || "",
+                            baseUrl: model.baseUrl || APP_CONFIG.defaultBaseUrl
+                        };
+                    });
                 if (settings.defaultModelKey) {
                     state.selectedModelKey = settings.defaultModelKey;
                 }
             }
             if (Array.isArray(settings.debateModels) && settings.debateModels.length) {
-                state.debateModels = settings.debateModels.map((model) => {
-                    return {
-                        key: model.key,
-                        id: model.id,
-                        label: model.label,
-                        apiKey: model.apiKey || "",
-                        baseUrl: model.baseUrl || APP_CONFIG.defaultBaseUrl,
-                        bias: model.bias || "both",
-                        isDebateParticipant: model.isDebateParticipant !== undefined ? model.isDebateParticipant : true
-                    };
-                });
+                state.debateModels = settings.debateModels
+                    .filter((model) => permittedModels.has(String(model.id || "").trim()))
+                    .map((model) => {
+                        return {
+                            key: model.key,
+                            id: model.id,
+                            label: model.label,
+                            apiKey: model.apiKey || "",
+                            baseUrl: model.baseUrl || APP_CONFIG.defaultBaseUrl,
+                            bias: model.bias || "both",
+                            isDebateParticipant: model.isDebateParticipant !== undefined ? model.isDebateParticipant : true
+                        };
+                    });
             }
             if ((Array.isArray(settings.nvidiaModels) && settings.nvidiaModels.length) || (Array.isArray(settings.debateModels) && settings.debateModels.length)) {
                 saveLocalSettings();
@@ -3714,16 +3763,58 @@ function initSettingsUI() {
                 throw new Error("NVIDIA returned zero models for this key.");
             }
 
-            const importedSummaryModels = data.models.map((m) => {
-                const id = String(m.id || "").trim();
-                return {
-                    key: id.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase(),
-                    id,
-                    label: String(m.label || id),
-                    apiKey,
-                    baseUrl,
-                };
-            }).filter((m) => m.id);
+            const permittedModels = new Set([
+                "meta/llama-3.1-8b-instruct",
+                "meta/llama-3.3-70b-instruct",
+                "abacusai/dracarys-llama-3.1-70b-instruct",
+                "meta/llama-4-maverick-17b-128e-instruct",
+                "mistralai/mistral-nemotron",
+                "nvidia/llama-3.3-nemotron-super-49b-v1",
+                "google/gemma-3n-e2b-it",
+                "google/gemma-3n-e4b-it",
+                "meta/llama-3.2-3b-instruct",
+                "mistralai/ministral-14b-instruct-2512",
+                "mistralai/mistral-large-3-675b-instruct-2512",
+                "mistralai/mistral-medium-3.5-128b",
+                "mistralai/mistral-small-4-119b-2603",
+                "mistralai/mixtral-8x7b-instruct-v0.1",
+                "nvidia/llama-3.1-nemotron-nano-8b-v1",
+                "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-mini-4b-instruct",
+                "nvidia/nemotron-nano-12b-v2-vl",
+                "qwen/qwen3-coder-480b-a35b-instruct",
+                "qwen/qwen3.5-397b-a17b",
+                "stockmark/stockmark-2-100b-instruct",
+                "upstage/solar-10.7b-instruct",
+                "bytedance/seed-oss-36b-instruct",
+                "deepseek-ai/deepseek-v4-flash",
+                "deepseek-ai/deepseek-v4-pro",
+                "google/gemma-4-31b-it",
+                "meta/llama-3.1-70b-instruct",
+                "meta/llama-3.2-1b-instruct",
+                "microsoft/phi-4-mini-instruct",
+                "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+                "nvidia/nemotron-3-ultra-550b-a55b",
+                "qwen/qwen3-next-80b-a3b-instruct",
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "nvidia/nvidia-nemotron-nano-9b-v2",
+                "nvidia/nemotron-3-nano-30b-a3b"
+            ]);
+
+            const importedSummaryModels = data.models
+                .filter((m) => permittedModels.has(String(m.id || "").trim()))
+                .map((m) => {
+                    const id = String(m.id || "").trim();
+                    return {
+                        key: id.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase(),
+                        id,
+                        label: String(m.label || id),
+                        apiKey,
+                        baseUrl,
+                    };
+                }).filter((m) => m.id);
 
             const importedDebateModels = importedSummaryModels.map((m) => ({
                 ...m,
@@ -3731,8 +3822,9 @@ function initSettingsUI() {
                 isDebateParticipant: true,
             }));
 
-            state.models = mergeImportedModels(state.models, importedSummaryModels);
-            state.debateModels = mergeImportedModels(state.debateModels, importedDebateModels);
+            // Direct assignment: replace existing lists with imported models only
+            state.models = importedSummaryModels;
+            state.debateModels = importedDebateModels;
             state.selectedModelKey = importedSummaryModels[0]?.key || state.selectedModelKey;
 
             const globalInput = dom.get("#globalNvidiaApiKeysInput");
@@ -4005,6 +4097,90 @@ function showTrackerModal(stepName) {
   if (title) title.textContent = stepTitle;
   if (summary) summary.textContent = stepSummary;
   if (valuesList) valuesList.innerHTML = itemsHtml;
+
+  // Toggle open
+  modal.style.display = "grid";
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function setupDebateCouncilModal() {
+  const closeBtn = document.getElementById("closeDebateCouncilModal");
+  if (closeBtn) {
+    closeBtn.onclick = () => {
+      const modal = document.getElementById("debateCouncilModal");
+      if (modal) {
+        modal.style.display = "none";
+        modal.classList.remove("open");
+        modal.setAttribute("aria-hidden", "true");
+      }
+    };
+  }
+  const viewDetailsBtn = document.getElementById("viewDebateDetailsButton");
+  if (viewDetailsBtn) {
+    viewDetailsBtn.onclick = () => showDebateCouncilModal();
+  }
+}
+
+function showDebateCouncilModal() {
+  const modal = document.getElementById("debateCouncilModal");
+  const modelList = document.getElementById("debateModelList");
+  const activeModelName = document.getElementById("debateActiveModelName");
+  const outputContainer = document.getElementById("debateModelOutputContainer");
+  if (!modal) return;
+
+  // Reset display
+  if (modelList) modelList.innerHTML = "";
+  if (activeModelName) activeModelName.textContent = "Select a model to view output";
+  if (outputContainer) outputContainer.textContent = "Choose a model from the left sidebar to display its response commentary here.";
+
+  const aiResult = state.lastAiResult || {};
+  const debateResponses = aiResult.ai?.debateResponses || [];
+
+  if (!debateResponses.length) {
+    if (outputContainer) {
+      if (aiResult.ai?.debateUsed === false) {
+        outputContainer.textContent = "No debate was conducted. Either only a single summary model was selected, or all debate models timed out/failed. Run a bot preview first with debate models enabled in Settings.";
+      } else {
+        outputContainer.textContent = "No active debate data found. Please run a bot preview first to execute the Arbiter Debate Council.";
+      }
+    }
+  } else {
+    // Populate list of models
+    debateResponses.forEach((resp, idx) => {
+      const li = document.createElement("li");
+      const biasLabel = String(resp.bias || "balanced").toUpperCase();
+      li.innerHTML = `
+        <button class="debate-model-item" data-index="${idx}">
+          <span class="debate-model-name">${escapeHtml(resp.modelLabel || resp.modelId)}</span>
+          <span class="debate-model-badge ${escapeHtml(resp.bias || 'balanced')}">${escapeHtml(biasLabel)}</span>
+        </button>
+      `;
+      modelList.appendChild(li);
+    });
+
+    // Add click listeners to items
+    const items = modelList.querySelectorAll(".debate-model-item");
+    items.forEach(btn => {
+      btn.onclick = () => {
+        // Toggle active class
+        items.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+
+        const index = parseInt(btn.getAttribute("data-index"), 10);
+        const resp = debateResponses[index];
+        if (resp) {
+          activeModelName.textContent = `${resp.modelLabel || resp.modelId} (${String(resp.bias || 'balanced').toUpperCase()})`;
+          outputContainer.textContent = resp.output || "Empty response from model.";
+        }
+      };
+    });
+
+    // Automatically click first model in the list
+    if (items.length > 0) {
+      items[0].click();
+    }
+  }
 
   // Toggle open
   modal.style.display = "grid";
