@@ -36,7 +36,7 @@ const BASIC_SETTINGS_PASSWORD = "XAUUSD";
 
 // --- State Management ---
 let state = {
-  trueGoldPrice: 2350.00,
+  trueGoldPrice: null,
   selectedTimeframe: "15min",
   selectedTimezone: "Asia/Kolkata",
   candleCount: 1000,
@@ -2252,6 +2252,7 @@ function normalizeGrade(value) {
 
 
 let sentimentInterval = null;
+let pricePollingInterval = null;
 let lastGoldPrice = 2350.00;
 let dailyOpenGold = 2345.00;
 
@@ -2394,8 +2395,23 @@ function updateRealTimeTracker(price, trend, structureEvents, fvgs, obs, decisio
   }
 }
 
+async function fetchLivePrice() {
+  try {
+    const symbol = encodeURIComponent(state.botInstrument || "XAU_USD");
+    const url = apiUrl(`/live-price?symbol=${symbol}`);
+    const response = await fetch(url, { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok && payload.price) {
+      state.trueGoldPrice = Number(payload.price);
+    }
+  } catch (error) {
+    console.warn("Failed to fetch live price:", error);
+  }
+}
+
 function startRealTimeFeeds(analysis) {
   if (sentimentInterval) clearInterval(sentimentInterval);
+  if (pricePollingInterval) clearInterval(pricePollingInterval);
   
   if (analysis && analysis.price) {
     state.trueGoldPrice = analysis.price;
@@ -2414,7 +2430,18 @@ function startRealTimeFeeds(analysis) {
     } catch (e) {}
   }
 
+  // Initial immediate fetch and schedule 2s polling
+  fetchLivePrice();
+  pricePollingInterval = setInterval(fetchLivePrice, 2000);
+
   const tick = () => {
+    if (!state.trueGoldPrice) {
+      const topPriceEl = document.getElementById("priceLabel");
+      if (topPriceEl && topPriceEl.textContent !== "--") {
+        topPriceEl.textContent = "--";
+      }
+      return;
+    }
     // Micro-fluctuation centered around the true fetched price to show lifelike ticks without artificial drift
     const microOffset = (Math.random() - 0.5) * 0.04;
     const liveDisplayPrice = Number((state.trueGoldPrice + microOffset).toFixed(2));

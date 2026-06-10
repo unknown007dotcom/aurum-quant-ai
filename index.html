@@ -569,6 +569,11 @@
         <div id="modelSelect" class="custom-select"></div>
       </label>
 
+      <label class="field admin-only">
+        <span>Debate Mode</span>
+        <div id="debateModeSelect" class="custom-select"></div>
+      </label>
+
       <div class="settings-divider admin-only"></div>
 
       <div class="model-manager admin-only">
@@ -762,7 +767,10 @@
       <div class="debate-modal-layout" style="margin-top: 1.25rem;">
         <!-- Left Column: List of Models -->
         <div class="debate-models-sidebar">
-          <h4 style="color: var(--accent); margin-bottom: 0.75rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.25rem;">Models</h4>
+          <div class="debate-tabs">
+            <button id="tabDebateSuccess" class="debate-tab-btn active" type="button">SUCCESS</button>
+            <button id="tabDebateFailed" class="debate-tab-btn" type="button">FAILED</button>
+          </div>
           <ul id="debateModelList" style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
             <!-- Model list dynamically populated -->
           </ul>

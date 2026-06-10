@@ -391,7 +391,7 @@ function handleViewportChange() {
 }
 
 function isMobileViewport() {
-  return window.matchMedia("(max-width: 720px)").matches;
+  return window.matchMedia("(max-width: 768px)").matches;
 }
 
 function escapeSelector(value) {

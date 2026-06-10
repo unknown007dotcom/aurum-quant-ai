@@ -1,8 +1,37 @@
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const { getAdminSettings, getFirestore } = require("../lib/firebase-admin");
 const { getSummaryKnowledge, getDebateKnowledge } = require("../lib/smc-knowledge");
-const DEBATE_MAX_WAIT_MS = 25000;
-const MAX_DEBATE_MODELS = 60;
+const DEBATE_MODES = {
+  fast: { maxModels: 6, concurrency: 6, timeoutMs: 18000 },
+  deep: { maxModels: 20, concurrency: 10, timeoutMs: 25000 },
+  full: { maxModels: 35, concurrency: 12, timeoutMs: 25000 },
+};
+
+async function runWithConcurrency(items, limit, workerFn) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function runner() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      try {
+        results[currentIndex] = await workerFn(items[currentIndex], currentIndex);
+      } catch (error) {
+        results[currentIndex] = {
+          ok: false,
+          statusCode: 500,
+          message: error?.message || "Worker function failed",
+        };
+      }
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    () => runner()
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 const modelCatalogCache = new Map();
 
 module.exports = async function handler(req, res) {
@@ -89,7 +118,10 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const debatePool = buildDebatePool(debateModels, selectedSummary);
+  const debateMode = body.debateMode || settings?.debateMode || "full";
+  const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.deep;
+
+  const debatePool = buildDebatePool(debateModels, selectedSummary, mode.maxModels);
   if (!debatePool.length) {
     const direct = await requestAiModel({
       modelConfig: selectedSummary,
@@ -135,25 +167,68 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const debateResults = await Promise.all(
-    debatePool.map(async (entry, index) => {
-      // Apply a staggered start (150ms delay per model) to avoid provider rate limits (429s)
+  const debateResults = await runWithConcurrency(
+    debatePool,
+    mode.concurrency,
+    async (entry, index) => {
       if (index > 0) {
         await new Promise((resolve) => setTimeout(resolve, index * 150));
       }
-      return requestAiModel({
+      let result = await requestAiModel({
         modelConfig: entry.modelConfig,
         prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
         temperature,
         systemPrompt: buildDebateSystemPrompt(),
-        maxTokens: 700,
-      }, { timeoutMs: DEBATE_MAX_WAIT_MS });
-    }),
+        maxTokens: 220,
+      }, { timeoutMs: mode.timeoutMs });
+
+      // Useful retry check
+      const shouldRetry = !result.ok && (
+        result.statusCode === 429 ||
+        result.statusCode === 422 ||
+        result.statusCode === 500 ||
+        result.statusCode === 502 ||
+        result.statusCode === 503 ||
+        result.statusCode === 504 ||
+        /timeout|rate limit|internal server error|bad gateway|service unavailable/i.test(result.message || "")
+      );
+
+      if (shouldRetry) {
+        result = await requestAiModel({
+          modelConfig: entry.modelConfig,
+          prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
+          temperature,
+          systemPrompt: buildDebateSystemPrompt(),
+          maxTokens: 220,
+        }, { timeoutMs: mode.timeoutMs });
+      }
+
+      return result;
+    }
   );
 
-  const successfulDebates = debateResults
-    .map((result, index) => ({ result, model: debatePool[index] }))
-    .filter((item) => item.result.ok && extractAiText(item.result.payload));
+  const allDebateEntries = debateResults.map((result, index) => ({
+    result,
+    model: debatePool[index],
+  }));
+
+  const successfulDebates = allDebateEntries.filter(
+    (item) => item.result.ok && extractAiText(item.result.payload)
+  );
+
+  const failedDebates = allDebateEntries
+    .filter((item) => !(item.result.ok && extractAiText(item.result.payload)))
+    .map((item) => ({
+      modelLabel: item.model?.modelConfig?.label || "",
+      modelId: item.model?.modelConfig?.id || "",
+      bias: item.model?.bias || "",
+      statusCode: item.result?.statusCode || null,
+      message: item.result?.message || "No usable output",
+      hasPayload: Boolean(item.result?.payload),
+      payloadPreview: item.result?.payload
+        ? JSON.stringify(item.result.payload).slice(0, 300)
+        : "",
+    }));
 
   const debateConsensus = { buy: 0, sell: 0, wait: 0 };
   successfulDebates.forEach(item => {
@@ -193,6 +268,7 @@ module.exports = async function handler(req, res) {
         debateSuccessful: 0,
         debateWorking: 0,
         debateConsensus,
+        debateFailures: failedDebates,
       });
       return;
     }
@@ -212,6 +288,7 @@ module.exports = async function handler(req, res) {
       debateSuccessful: 0,
       debateWorking: 0,
       debateConsensus,
+      debateFailures: failedDebates,
     });
     return;
   }
@@ -250,6 +327,7 @@ module.exports = async function handler(req, res) {
         debateSuccessful: successfulDebates.length,
         debateWorking: successfulDebates.length,
         debateConsensus,
+        debateFailures: failedDebates,
         debateResponses: successfulDebates.map(d => ({
           modelLabel: d.model.modelConfig.label,
           modelId: d.model.modelConfig.id,
@@ -270,6 +348,7 @@ module.exports = async function handler(req, res) {
       debateSuccessful: successfulDebates.length,
       debateWorking: successfulDebates.length,
       debateConsensus,
+      debateFailures: failedDebates,
       debateResponses: successfulDebates.map(d => ({
         modelLabel: d.model.modelConfig.label,
         modelId: d.model.modelConfig.id,
@@ -290,6 +369,7 @@ module.exports = async function handler(req, res) {
     debateSuccessful: successfulDebates.length,
     debateWorking: successfulDebates.length,
     debateConsensus,
+    debateFailures: failedDebates,
     debateResponses: successfulDebates.map(d => ({
       modelLabel: d.model.modelConfig.label,
       modelId: d.model.modelConfig.id,
@@ -376,7 +456,7 @@ function sanitizeProviderFailureReason(reason) {
   return text.replace(/\bAI HTTP\s*\d+\b/gi, "AI provider error");
 }
 
-function buildDebatePool(debateModels, selectedSummary) {
+function buildDebatePool(debateModels, selectedSummary, maxModels = 20) {
   const normalizedDebates = Array.isArray(debateModels) ? debateModels : [];
   const uniqueDebates = dedupeModels(normalizedDebates.filter((model) => model.id && model.apiKey));
   const leftover = dedupeModels(
@@ -390,7 +470,7 @@ function buildDebatePool(debateModels, selectedSummary) {
     ),
   );
 
-  const capped = shuffleAndCap(leftover.filter((model) => model.id && model.apiKey), MAX_DEBATE_MODELS);
+  const capped = shuffleAndCap(leftover.filter((model) => model.id && model.apiKey), maxModels);
   return assignDebateBiasTeams(capped);
 }
 

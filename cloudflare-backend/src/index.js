@@ -211,6 +211,9 @@ export default {
       if (url.pathname === "/market-mtf" && request.method === "GET") {
         return handleMarketMtfResponse(url, env, request);
       }
+      if (url.pathname === "/live-price" && request.method === "GET") {
+        return handleLivePriceResponse(url, env, request);
+      }
       if (url.pathname === "/bot") {
         return jsonResponse(await handleBot(request, env, ctx), request);
       }
@@ -263,6 +266,16 @@ async function handleMarketMtfResponse(url, env, request) {
       ...corsHeaders(request),
     },
   });
+}
+
+async function handleLivePriceResponse(url, env, request) {
+  const symbol = normalizeInstrument(url.searchParams.get("symbol") || DEFAULT_INSTRUMENT);
+  try {
+    const price = await fetchPrice(env, { instrument: symbol });
+    return jsonResponse({ price: price?.mid || null, time: price?.time || null }, request);
+  } catch (error) {
+    return jsonResponse({ message: error?.message || "Failed to fetch live price from OANDA." }, request, 502);
+  }
 }
 
 async function handleBot(request, env, ctx) {
