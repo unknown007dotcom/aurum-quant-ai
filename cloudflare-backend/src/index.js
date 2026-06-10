@@ -984,18 +984,84 @@ async function fetchMtfPayload(env, options = {}) {
 async function fetchPrice(env, options = {}) {
   const config = await getOandaConfig(env);
   const instrument = normalizeInstrument(options.instrument || config.instrument);
-  const payload = await oandaRequest(config, `/v3/accounts/${encodeURIComponent(config.accountId)}/pricing`, {
-    query: { instruments: instrument },
-  });
-  const price = Array.isArray(payload?.prices) ? payload.prices[0] : null;
-  return {
-    instrument,
-    time: String(price?.time || ""),
-    bid: normalizeNumber(price?.closeoutBid || price?.bids?.[0]?.price, Number.NaN),
-    ask: normalizeNumber(price?.closeoutAsk || price?.asks?.[0]?.price, Number.NaN),
-    mid: midpoint(price),
-    status: String(price?.status || ""),
-  };
+  
+  // Try OANDA
+  try {
+    const payload = await oandaRequest(config, `/v3/accounts/${encodeURIComponent(config.accountId)}/pricing`, {
+      query: { instruments: instrument },
+    });
+    const price = Array.isArray(payload?.prices) ? payload.prices[0] : null;
+    if (price) {
+      const midVal = midpoint(price);
+      if (Number.isFinite(midVal)) {
+        const result = {
+          instrument,
+          time: String(price?.time || new Date().toISOString()),
+          bid: normalizeNumber(price?.closeoutBid || price?.bids?.[0]?.price, midVal),
+          ask: normalizeNumber(price?.closeoutAsk || price?.asks?.[0]?.price, midVal),
+          mid: midVal,
+          status: String(price?.status || "tradeable"),
+          source: "oanda"
+        };
+        // Cache it asynchronously in KV
+        if (env.CANDLE_CACHE) {
+          await env.CANDLE_CACHE.put("last_price_" + instrument, JSON.stringify(result)).catch(() => {});
+        }
+        return result;
+      }
+    }
+  } catch (error) {
+    console.warn("OANDA live price fetch failed, trying Twelve Data fallback:", error.message);
+  }
+
+  // Try Twelve Data
+  const settings = await loadSettings(env);
+  const twelveKeys = Array.isArray(settings?.twelveDataKeys) ? settings.twelveDataKeys : [];
+  const keys = [...twelveKeys, "23c57edf48e541e48db2806575f58bf7"].filter(Boolean);
+  if (keys.length > 0) {
+    const sym = instrument.replace("_", "/");
+    const key = keys[Math.floor(Math.random() * keys.length)];
+    try {
+      const response = await fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(sym)}&apikey=${encodeURIComponent(key)}`);
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.price) {
+        const p = Number(data.price);
+        const result = {
+          instrument,
+          time: new Date().toISOString(),
+          bid: p,
+          ask: p,
+          mid: p,
+          status: "tradeable",
+          source: "twelvedata"
+        };
+        // Cache it in KV
+        if (env.CANDLE_CACHE) {
+          await env.CANDLE_CACHE.put("last_price_" + instrument, JSON.stringify(result)).catch(() => {});
+        }
+        return result;
+      }
+    } catch (twelveErr) {
+      console.error("Twelve Data fallback failed:", twelveErr.message);
+    }
+  }
+
+  // Final Try: Retrieve last successfully cached price from Cloudflare KV
+  if (env.CANDLE_CACHE) {
+    try {
+      const cached = await env.CANDLE_CACHE.get("last_price_" + instrument);
+      if (cached) {
+        const result = JSON.parse(cached);
+        result.source = (result.source || "unknown") + "-cached";
+        console.log(`Returning cached live price for ${instrument} from KV:`, result.mid);
+        return result;
+      }
+    } catch (cacheErr) {
+      console.error("Failed to load cached price:", cacheErr.message);
+    }
+  }
+
+  throw new Error("Failed to fetch live price from OANDA, Twelve Data, and cache.");
 }
 
 async function fetchCandles(env, options = {}) {

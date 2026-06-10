@@ -5,7 +5,7 @@ const { URL } = require("node:url");
 
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
-const API_ROOT = path.join(ROOT, "api");
+const API_ROOT = path.join(ROOT, "api-handlers");
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",

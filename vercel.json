@@ -9,8 +9,14 @@
       "schedule": "35 0 * * *"
     }
   ],
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
+    }
+  ],
   "functions": {
-    "api/**/*.js": {
+    "api/index.js": {
       "maxDuration": 300
     }
   }
