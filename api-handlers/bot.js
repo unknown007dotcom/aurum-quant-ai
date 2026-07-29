@@ -17,7 +17,7 @@ module.exports = async function handler(req, res) {
 
   const adminPassword = process.env.ADMIN_PASSWORD || "";
   const supplied = String(req.headers["x-admin-password"] || "");
-  const isAdmin = (adminPassword && supplied === adminPassword) || supplied === "Aviraj@api7";
+  const isAdmin = adminPassword && supplied === adminPassword;
   if (!isAdmin) {
     return res.status(401).json({ message: "Unauthorized." });
   }

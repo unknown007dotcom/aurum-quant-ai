@@ -1,3 +1,4 @@
+import { AnalysisEngine } from "../../modules/analysis-engine.js";
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_INSTRUMENT = "XAU_USD";
 const HISTORY_LIMIT = 150;
@@ -1239,12 +1240,12 @@ async function kvGetJson(env, key, fallback) {
 }
 
 function analyzeMtfData(mtfData, latestPrice) {
-  const entry = normalizeCandles(mtfData?.data?.find((item) => item.id === "entry")?.values || []);
-  const benchmark = normalizeCandles(mtfData?.data?.find((item) => item.id === "benchmark")?.values || []);
+  const entry = AnalysisEngine.normalizeCandles(mtfData?.data?.find((item) => item.id === "entry")?.values || []);
+  const benchmark = AnalysisEngine.normalizeCandles(mtfData?.data?.find((item) => item.id === "benchmark")?.values || []);
   if (entry.length < 30) throw new Error("Not enough entry candles to drive the bot.");
   const closes = entry.map((row) => row.close);
-  const ema21 = exponentialMovingAverage(closes, 21).at(-1);
-  const ema50 = exponentialMovingAverage(closes, 50).at(-1);
+  const ema21 = AnalysisEngine.exponentialMovingAverage(closes, 21).at(-1);
+  const ema50 = AnalysisEngine.exponentialMovingAverage(closes, 50).at(-1);
   const latestClose = entry.at(-1).close;
   let trend = "neutral";
   if (ema21 >= ema50) {
@@ -1252,16 +1253,16 @@ function analyzeMtfData(mtfData, latestPrice) {
   } else {
     trend = latestClose <= ema50 ? "bearish" : "bullish";
   }
-  const fvgs = detectFairValueGaps(entry);
+  const fvgs = AnalysisEngine.detectFairValueGaps(entry);
   const obs = detectOrderBlocks(entry, fvgs);
-  const structureEvents = detectStructureEvents(entry);
+  const structureEvents = AnalysisEngine.detectStructureEvents(entry);
   const price = Number.isFinite(Number(latestPrice?.mid)) ? Number(latestPrice.mid) : entry.at(-1).close;
-  const rmiValue = calculateRmi(entry);
+  const rmiValue = AnalysisEngine.calculateRMI(entry);
   const rmiBias = rmiValue >= 100 ? "bullish" : "bearish";
   const htfAlignment = (Array.isArray(mtfData?.data) ? mtfData.data : [])
     .filter((row) => ["h1", "1day", "1week", "1month"].includes(row.id))
     .map((row) => {
-      const values = normalizeCandles(row.values || []);
+      const values = AnalysisEngine.normalizeCandles(row.values || []);
       if (values.length < 2) return `${row.id.toUpperCase()} unavailable`;
       const oldest = values[0].close;
       const latest = values.at(-1).close;

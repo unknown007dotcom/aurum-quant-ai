@@ -6,8 +6,10 @@ module.exports = async function handler(req, res) {
   const method = req.method;
   const action = req.query.action;
   const adminPassword = process.env.ADMIN_PASSWORD || "";
+  const basicPassword = process.env.BASIC_PASSWORD || "";
   const supplied = String(req.headers["x-admin-password"] || "");
-  const isAdmin = (adminPassword && supplied === adminPassword) || supplied === "Aviraj@api7";
+  const isAdmin = adminPassword && supplied === adminPassword;
+  const isBasic = basicPassword && supplied === basicPassword;
 
   if (method === "GET") {
     try {
@@ -27,7 +29,7 @@ module.exports = async function handler(req, res) {
         }
         return res.status(200).json({ isAdmin: true, settings });
       } else {
-        return res.status(200).json({ isAdmin: false, settings: sanitizePublicSettings(settings) });
+        return res.status(200).json({ isAdmin: false, isBasic, settings: sanitizePublicSettings(settings) });
       }
     } catch (error) {
       return res.status(500).json({ message: error.message });

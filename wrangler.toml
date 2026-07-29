@@ -1,0 +1,19 @@
+# wrangler.toml
+name = "aurum-quant-ai"
+compatibility_date = "2026-06-14"
+# Main entry point for the Cloudflare Worker
+main = "cloudflare-backend/src/index.js"
+
+# KV namespace binding (adjust name as needed)
+kv_namespaces = [{ binding = "AURUM_KV", id = "3d37e7d198d749dc93bd8856020be618" }]
+
+# Environment variables (placeholders, set via Cloudflare dashboard or secrets)
+[vars]
+# NVIDIA API key - set in Cloudflare Secrets
+# NVIDIA_API_KEY = "your-nvidia-api-key"
+
+# Optional: add other bindings like R2, D1 etc.
+
+
+
+# -----------------------------------------------------------------

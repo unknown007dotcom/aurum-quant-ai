@@ -11,6 +11,12 @@ import("./modules/engines/FibonacciEngine.js").then(mod => {
 }).catch(err => {
     console.error("Failed to load FibonacciEngine module", err);
 });
+let SharedAnalysisEngine = null;
+import("./modules/analysis-engine.js").then(mod => {
+    SharedAnalysisEngine = window.AnalysisEngine || mod.AnalysisEngine;
+}).catch(err => {
+    console.error("Failed to load SharedAnalysisEngine module", err);
+});
 
 // --- Constants & Config ---
 const STORAGE_KEY = "xauusd-analyzer-settings-v1";
@@ -31,8 +37,8 @@ const APP_CONFIG = {
   defaultMarketDataKey: "",
   defaultBaseUrl: "https://integrate.api.nvidia.com/v1"
 };
-const SETTINGS_PASSWORD = "Aviraj@api7";
-const BASIC_SETTINGS_PASSWORD = "XAUUSD";
+const SETTINGS_PASSWORD = "";
+const BASIC_SETTINGS_PASSWORD = "";
 
 // --- State Management ---
 let state = {
@@ -43,7 +49,7 @@ let state = {
   temperature: 0.2,
   theme: "dark",
   isRunning: false,
-  settingsRole: "locked",
+  settingsRole: "locked", sessionPassword: "",
   analysisHistory: [],
   botStatus: null,
   currentRmi: 100,
@@ -122,54 +128,19 @@ const dom = {
 // --- Analysis Logic ---
 const AnalysisEngine = {
     toNumber(value, fallback = 0) {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : fallback;
+        return SharedAnalysisEngine ? SharedAnalysisEngine.toNumber(value, fallback) : fallback;
     },
 
     normalizeCandles(candles) {
-        if (!Array.isArray(candles)) return [];
-        // Twelve Data returns newest-first. Sort ascending (oldest→newest)
-        // so .at(-1) always gives the LATEST candle.
-        return candles
-            .map((candle) => ({
-                ...candle,
-                open: Number(candle?.open),
-                high: Number(candle?.high),
-                low: Number(candle?.low),
-                close: Number(candle?.close),
-                _ts: new Date(candle?.datetime || 0).getTime(),
-            }))
-            .filter((candle) => 
-                Number.isFinite(candle.open) && candle.open > 0 &&
-                Number.isFinite(candle.high) && candle.high > 0 &&
-                Number.isFinite(candle.low) && candle.low > 0 &&
-                Number.isFinite(candle.close) && candle.close > 0
-            )
-            .sort((a, b) => a._ts - b._ts); // oldest first
+        return SharedAnalysisEngine ? SharedAnalysisEngine.normalizeCandles(candles) : [];
     },
 
     exponentialMovingAverage(values, period) {
-        const k = 2 / (period + 1);
-        let ema = [values[0]];
-        for (let i = 1; i < values.length; i++) ema.push(values[i] * k + ema[i - 1] * (1 - k));
-        return ema;
+        return SharedAnalysisEngine ? SharedAnalysisEngine.exponentialMovingAverage(values, period) : [];
     },
 
     averageTrueRange(candles, period) {
-        if (!candles || candles.length === 0) return [];
-        let tr = [candles[0].high - candles[0].low];
-        for (let i = 1; i < candles.length; i++) {
-            tr.push(Math.max(
-                candles[i].high - candles[i].low,
-                Math.abs(candles[i].high - candles[i - 1].close),
-                Math.abs(candles[i].low - candles[i - 1].close)
-            ));
-        }
-        let atr = [tr[0]];
-        for (let i = 1; i < tr.length; i++) {
-            atr.push((atr[i - 1] * (period - 1) + tr[i]) / period);
-        }
-        return atr;
+        return SharedAnalysisEngine ? SharedAnalysisEngine.averageTrueRange(candles, period) : [];
     },
 
     standardDeviation(values, period) {
@@ -188,85 +159,19 @@ const AnalysisEngine = {
     },
 
     calculateRMI(candles, benchmark) {
-        if (!candles || candles.length < 30) return 100.00;
-        const closes = candles.map(c => c.close);
-        const period = 30;
-        const k = 2 / (period + 1);
-        let ema = closes[0];
-        for (let i = 1; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
-        const rmi = (closes.at(-1) / ema) * 100;
-        return parseFloat(rmi.toFixed(2));
+        return SharedAnalysisEngine ? SharedAnalysisEngine.calculateRMI(candles) : 100.00;
     },
 
     detectFairValueGaps(candles) {
-        const fvgs = [];
-        const isBull = (c) => c.close > c.open;
-        const isBear = (c) => c.close < c.open;
-
-        for (let i = 1; i < candles.length - 1; i++) {
-            const p = candles[i - 1];
-            const curr = candles[i];
-            const n = candles[i + 1];
-
-            const isGapUp = curr.open > p.close;
-            const isGapDown = curr.open < p.close;
-
-            // Bullish FVG or Gap Up
-            if ((n.low > p.high && isBull(curr)) || isGapUp) {
-                let type = isGapUp ? "Gap Up FVG" : "Standard";
-                if (isBull(p) && isBull(n)) type = isGapUp ? "Gap Up (FOMO Trap)" : "Exhaustion FVG (FOMO Trap)";
-                else if (isBull(p) && isBear(n)) type = isGapUp ? "Gap Up (Trade Continuation)" : "Trade Continuation";
-                else if (isBear(p) && isBull(n)) type = isGapUp ? "Gap Up (The Sweep)" : "The Sweep (Delayed Trap)";
-                else if (isBear(p) && isBear(n)) type = isGapUp ? "Gap Up (Holy Grail)" : "The Holy Grail (Ultimate Jackpot ⭐⭐⭐⭐⭐)";
-
-                const price = isGapUp ? (curr.open + p.close) / 2 : (n.low + p.high) / 2;
-                if (!fvgs.some(f => f.side === "bullish" && Math.abs(f.price - price) < 0.05)) {
-                    fvgs.push({ side: "bullish", price, type });
-                }
-            }
-            // Bearish FVG or Gap Down
-            else if ((n.high < p.low && isBear(curr)) || isGapDown) {
-                let type = isGapDown ? "Gap Down FVG" : "Standard";
-                if (isBear(p) && isBear(n)) type = isGapDown ? "Gap Down (FOMO Trap)" : "Exhaustion FVG (FOMO Trap)";
-                else if (isBear(p) && isBull(n)) type = isGapDown ? "Gap Down (Trade Continuation)" : "Trade Continuation";
-                else if (isBull(p) && isBear(n)) type = isGapDown ? "Gap Down (The Sweep)" : "The Sweep (Delayed Trap)";
-                else if (isBull(p) && isBull(n)) type = isGapDown ? "Gap Down (Holy Grail)" : "The Holy Grail (Ultimate Jackpot ⭐⭐⭐⭐⭐)";
-
-                const price = isGapDown ? (curr.open + p.close) / 2 : (n.high + p.low) / 2;
-                if (!fvgs.some(f => f.side === "bearish" && Math.abs(f.price - price) < 0.05)) {
-                    fvgs.push({ side: "bearish", price, type });
-                }
-            }
-        }
-        return fvgs.slice(-8);
+        return SharedAnalysisEngine ? SharedAnalysisEngine.detectFairValueGaps(candles) : [];
     },
 
     detectStructureEvents(candles) {
-        const events = [];
-        for (let i = 2; i < candles.length; i++) {
-            const current = candles[i];
-            const previous = candles[i - 1];
-            const pivot = candles[i - 2];
-            if (current.high > previous.high && previous.high <= pivot.high) {
-                events.push(`BOS up through ${previous.high.toFixed(2)}`);
-            }
-            if (current.low < previous.low && previous.low >= pivot.low) {
-                events.push(`Liquidity sweep below ${previous.low.toFixed(2)}`);
-            }
-        }
-        return events.slice(-6);
+        return SharedAnalysisEngine ? SharedAnalysisEngine.detectStructureEvents(candles) : [];
     },
 
     detectOrderBlocks(candles, trend) {
-        const relevant = candles.slice(-12, -1);
-        const matches = relevant
-            .filter((candle) => trend === "bullish" ? candle.close < candle.open : candle.close > candle.open)
-            .slice(-3)
-            .map((candle) => {
-                const side = trend === "bullish" ? "Bullish demand" : "Bearish supply";
-                return `${side} ${candle.low.toFixed(2)} - ${candle.high.toFixed(2)}`;
-            });
-        return matches.length ? matches : ["No clean order block found in current scan window."];
+        return SharedAnalysisEngine ? SharedAnalysisEngine.detectOrderBlocks(candles, trend) : [];
     },
 
     buildHeatmap(price, trend, rmiBias, htfAlignment = []) {
@@ -283,78 +188,11 @@ const AnalysisEngine = {
     },
 
     detectSwings(candles, strength) {
-        const highs = [];
-        const lows = [];
-        for (let i = strength; i < candles.length - strength; i++) {
-            let isHigh = true;
-            let isLow = true;
-            for (let j = 1; j <= strength; j++) {
-                if (candles[i].high < candles[i - j].high || candles[i].high < candles[i + j].high) isHigh = false;
-                if (candles[i].low > candles[i - j].low || candles[i].low > candles[i + j].low) isLow = false;
-            }
-            if (isHigh) highs.push({ index: i, price: candles[i].high });
-            if (isLow) lows.push({ index: i, price: candles[i].low });
-        }
-        return { highs, lows };
+        return SharedAnalysisEngine ? SharedAnalysisEngine.detectSwings(candles, strength) : { highs: [], lows: [] };
     },
 
     detectFibonacci(candles, currentPrice) {
-        const swings = this.detectSwings(candles, 3);
-        if (!swings || !swings.highs.length || !swings.lows.length) return null;
-
-        const allSwings = [];
-        swings.highs.forEach(s => allSwings.push({ ...s, type: 'high' }));
-        swings.lows.forEach(s => allSwings.push({ ...s, type: 'low' }));
-        allSwings.sort((a, b) => a.index - b.index);
-
-        if (allSwings.length < 2) return null;
-
-        const lastSwing = allSwings[allSwings.length - 1];
-        let prevSwing = null;
-        for (let i = allSwings.length - 2; i >= 0; i--) {
-            if (allSwings[i].type !== lastSwing.type) {
-                prevSwing = allSwings[i];
-                break;
-            }
-        }
-
-        if (!prevSwing) return null;
-
-        const isBullishImpulse = lastSwing.type === 'high' && prevSwing.type === 'low';
-        
-        let highPrice = isBullishImpulse ? lastSwing.price : prevSwing.price;
-        let lowPrice = !isBullishImpulse ? lastSwing.price : prevSwing.price;
-        let range = highPrice - lowPrice;
-
-        if (range <= 0) return null;
-
-        let levels = {};
-        if (isBullishImpulse) {
-            levels = { 0: highPrice, 0.618: highPrice - (range * 0.618), 0.705: highPrice - (range * 0.705), 1: lowPrice };
-        } else {
-            levels = { 0: lowPrice, 0.618: lowPrice + (range * 0.618), 0.705: lowPrice + (range * 0.705), 1: highPrice };
-        }
-
-        let inEntryZone = isBullishImpulse 
-            ? (currentPrice <= levels[0.618] && currentPrice >= levels[0.705])
-            : (currentPrice >= levels[0.618] && currentPrice <= levels[0.705]);
-
-        return {
-            isBullishImpulse,
-            levels,
-            inEntryZone,
-            action: isBullishImpulse ? "Buy" : "Sell",
-            tp: levels[0],
-            sl: levels[1],
-            displayList: [
-                `Direction: ${isBullishImpulse ? 'Bullish' : 'Bearish'} Retracement`,
-                `Level 0 (TP): ${levels[0].toFixed(2)}`,
-                `Level 0.618 (Entry): ${levels[0.618].toFixed(2)}`,
-                `Level 0.705 (Entry): ${levels[0.705].toFixed(2)}`,
-                `Level 1 (SL): ${levels[1].toFixed(2)}`,
-                `Status: ${inEntryZone ? '🟢 IN ENTRY ZONE' : '⚪ Pending'}`
-            ]
-        };
+        return SharedAnalysisEngine ? SharedAnalysisEngine.detectFibonacci(candles, currentPrice) : null;
     },
 
     run(mtfData) {
@@ -2910,7 +2748,7 @@ async function sendBotCommand(action, extra = {}) {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "x-admin-password": SETTINGS_PASSWORD,
+            "x-admin-password": state.sessionPassword || "",
         },
         body: JSON.stringify({ action, ...extra }),
     });
@@ -3149,30 +2987,40 @@ window.addEventListener('DOMContentLoaded', () => {
 
     const unlockBtn = dom.get("#submitPasswordButton");
     if (unlockBtn) {
-        unlockBtn.onclick = () => {
+        unlockBtn.onclick = async () => {
             const passInput = dom.get("#passwordInput");
             const pass = passInput ? passInput.value : "";
             const errorEl = dom.get("#passwordError");
             if (errorEl) errorEl.textContent = ""; // Clear existing errors
             
-            if (pass === SETTINGS_PASSWORD || pass === BASIC_SETTINGS_PASSWORD) {
-                if (pass === BASIC_SETTINGS_PASSWORD) {
-                    state.settingsRole = "basic";
-                    document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
-                    document.querySelectorAll(".auth-only").forEach(el => el.style.display = "");
+            dom.setStatus("Verifying password...");
+            try {
+                const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': pass } });
+                const data = await response.json();
+                if (data.isAdmin || data.isBasic) {
+                    state.sessionPassword = pass;
+                    state.settingsRole = data.isAdmin ? "admin" : "basic";
+                    if (state.settingsRole === "basic") {
+                        document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
+                        document.querySelectorAll(".auth-only").forEach(el => el.style.display = "");
+                    } else {
+                        document.querySelectorAll(".admin-only").forEach(el => el.style.display = "");
+                        document.querySelectorAll(".auth-only").forEach(el => el.style.display = "");
+                    }
+                    await loadAdminSettings();
+                    dom.get("#passwordModal").classList.remove("open");
+                    dom.get("#settingsPanel").classList.add("open");
+                    loadAdminStats();
+                    dom.setStatus("Settings unlocked.");
                 } else {
-                    state.settingsRole = "admin";
-                    document.querySelectorAll(".admin-only").forEach(el => el.style.display = "");
-                    document.querySelectorAll(".auth-only").forEach(el => el.style.display = "");
+                    throw new Error("Invalid password");
                 }
-                dom.get("#passwordModal").classList.remove("open");
-                dom.get("#settingsPanel").classList.add("open");
-                loadAdminStats();
-            } else {
+            } catch (err) {
                 if (errorEl) {
                     errorEl.textContent = "Invalid password. Please try again.";
                     errorEl.style.color = "#ff6b6b";
                 }
+                dom.setStatus("Unlock failed.");
             }
         };
     }
@@ -3183,7 +3031,7 @@ window.addEventListener('DOMContentLoaded', () => {
     // --- Wire Admin Settings API ---
     async function loadAdminSettings() {
         try {
-            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': SETTINGS_PASSWORD } });
+            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': state.sessionPassword || '' } });
             const data = await response.json();
             if (!data.isAdmin) {
                 dom.setStatus("Backend admin auth mismatch. Settings are loading in read-only mode.");
@@ -3332,7 +3180,7 @@ window.addEventListener('DOMContentLoaded', () => {
             const body = typeof key === "object" ? key : { [key]: value };
             const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, {
                 method: 'POST',
-                headers: { 'x-admin-password': SETTINGS_PASSWORD, 'Content-Type': 'application/json' },
+                headers: { 'x-admin-password': state.sessionPassword || '', 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
             const payload = await response.json().catch(() => ({}));
@@ -3471,7 +3319,7 @@ window.addEventListener('DOMContentLoaded', () => {
         
         try {
             const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}?action=metrics`, { 
-                headers: { 'x-admin-password': SETTINGS_PASSWORD } 
+                headers: { 'x-admin-password': state.sessionPassword || '' } 
             });
             const data = await response.json();
             const m = data.metrics || {};
@@ -3779,7 +3627,7 @@ function initSettingsUI() {
         try {
             const res = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}?action=fetch-nvidia`, {
                 method: 'POST',
-                headers: { 'x-admin-password': SETTINGS_PASSWORD, 'Content-Type': 'application/json' },
+                headers: { 'x-admin-password': state.sessionPassword || '', 'Content-Type': 'application/json' },
                 body: JSON.stringify({ apiKey, baseUrl })
             });
             const data = await res.json().catch(() => ({}));

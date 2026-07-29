@@ -2,8 +2,17 @@
   "name": "aurum-quant-ai",
   "private": true,
   "type": "commonjs",
+  "scripts": {
+    "dev": "wrangler dev",
+    "publish": "wrangler publish",
+    "test": "node tests/analysis-engine.test.js",
+    "check-build": "wrangler deploy --dry-run"
+  },
   "dependencies": {
     "firebase": "^12.12.1",
     "firebase-admin": "^12.5.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
   }
 }

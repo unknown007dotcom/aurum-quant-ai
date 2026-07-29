@@ -64,5 +64,3 @@ export const APP_CONFIG = {
   },
 };
 
-export const SETTINGS_PASSWORD = "Aviraj@api7";
-export const BASIC_SETTINGS_PASSWORD = "XAUUSD";

@@ -3,6 +3,28 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { URL } = require("node:url");
 
+// Load .env manually for local server
+try {
+  const envPath = path.join(__dirname, ".env");
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, "utf8");
+    envContent.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return;
+      const index = trimmed.indexOf("=");
+      if (index === -1) return;
+      const key = trimmed.slice(0, index).trim();
+      const val = trimmed.slice(index + 1).trim();
+      const parsedVal = val.replace(/^["']|["']$/g, "");
+      if (!process.env[key]) {
+        process.env[key] = parsedVal;
+      }
+    });
+  }
+} catch (e) {
+  console.warn("Failed to load .env file:", e.message);
+}
+
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
 const API_ROOT = path.join(ROOT, "api-handlers");
