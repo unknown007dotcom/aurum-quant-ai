@@ -1,0 +1,19 @@
+{
+  "oandaApiToken": "",
+  "oandaAccountId": "",
+  "oandaEnvironment": "practice",
+  "globalNvidiaApiKey": "",
+  "globalNvidiaApiKeys": [],
+  "nvidiaModels": [
+    {
+      "key": "summary-model",
+      "id": "",
+      "label": "Summary model",
+      "apiKey": "",
+      "baseUrl": "https://integrate.api.nvidia.com/v1"
+    }
+  ],
+  "debateModels": [],
+  "defaultModelKey": "summary-model",
+  "debateMode": "fast"
+}

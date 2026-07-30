@@ -10,3 +10,6 @@ cloudflare-backend/.wrangler/
 .wrangler/
 aurum-server.err.log
 aurum-server.out.log
+
+# Local runtime settings can contain market-data and AI provider credentials.
+data/settings.json

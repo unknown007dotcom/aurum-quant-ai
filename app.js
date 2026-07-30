@@ -59,6 +59,8 @@ let state = {
   botCooldownMinutes: 15,
   botPollIntervalSeconds: 60,
   optionsDataKey: "",
+  // Keep the interactive request bounded. "full" councils can exceed browser/serverless request limits.
+  debateMode: "fast",
   selectedModelKey: "gpt-oss-default",
   models: [
     {
@@ -1692,6 +1694,9 @@ async function runAnalysis() {
                     baseUrl: selectedModel?.baseUrl,
                     models: state.models,
                     debateModels: state.debateModels,
+                    // Fast is the production default: it returns a real council result inside
+                    // the browser request budget instead of timing out a large "full" council.
+                    debateMode: state.debateMode || "fast",
                     temperature: state.temperature,
                     prompt
                 }),

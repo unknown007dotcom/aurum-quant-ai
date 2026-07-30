@@ -6,9 +6,15 @@ const MIN_DEPTH = 0.10;
 // --- Debate Council & Learning Memory Constants ---
 const DEBATE_MAX_WAIT_MS = 25000;
 const SUMMARY_MAX_WAIT_MS = 35000;
-const MAX_DEBATE_MODELS = 35;
-const DEFAULT_DEBATE_MAX_TOKENS = 750;
-const DEFAULT_SUMMARY_MAX_TOKENS = 2200;
+const DEBATE_MODES = {
+  // A production-safe default. It gives a real bull/bear/red-team council without
+  // exceeding the browser or Worker request budget.
+  fast: { maxModels: 4, debateTimeoutMs: 15000, summaryTimeoutMs: 25000 },
+  deep: { maxModels: 12, debateTimeoutMs: 25000, summaryTimeoutMs: 35000 },
+  full: { maxModels: 35, debateTimeoutMs: 25000, summaryTimeoutMs: 35000 },
+};
+const DEFAULT_DEBATE_MAX_TOKENS = 350;
+const DEFAULT_SUMMARY_MAX_TOKENS = 1200;
 const ALLOWED_ORIGINS = [
   "https://aurum-quant-ai.vercel.app",
   "http://localhost:3000",
@@ -530,7 +536,11 @@ async function handleAiDecision(request, env) {
   selectedSummary.id = resolvedModelId;
 
   // --- Build Debate Pool ---
-  const debatePool = buildDebatePool(debateModelPool, selectedSummary, access);
+  // Default to a bounded council. A 35-model council can take longer than the
+  // browser request timeout even when every individual provider request succeeds.
+  const requestedDebateMode = String(body.debateMode || settings.debateMode || "fast").toLowerCase();
+  const debateMode = DEBATE_MODES[requestedDebateMode] || DEBATE_MODES.fast;
+  const debatePool = buildDebatePool(debateModelPool, selectedSummary, debateMode.maxModels);
 
   // --- No debate models: direct Lead Arbiter call ---
   if (!debatePool.length) {
@@ -540,7 +550,7 @@ async function handleAiDecision(request, env) {
       temperature,
       systemPrompt: buildSummarySystemPrompt(),
       maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
-    }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+    }, { timeoutMs: debateMode.summaryTimeoutMs });
 
     if (!direct.ok) {
       const reason = direct.message || "Summary model unavailable.";
@@ -576,7 +586,7 @@ async function handleAiDecision(request, env) {
         temperature,
         systemPrompt: buildDebateSystemPrompt(),
         maxTokens: DEFAULT_DEBATE_MAX_TOKENS,
-      }, { timeoutMs: DEBATE_MAX_WAIT_MS });
+      }, { timeoutMs: debateMode.debateTimeoutMs });
     })
   );
 
@@ -594,7 +604,7 @@ async function handleAiDecision(request, env) {
       temperature,
       systemPrompt: buildSummarySystemPrompt(),
       maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
-    }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+    }, { timeoutMs: debateMode.summaryTimeoutMs });
 
     if (directSummary.ok) {
       directSummary.payload = enforceDirectionalOutput(directSummary.payload, promptWithLearning);
@@ -627,7 +637,7 @@ async function handleAiDecision(request, env) {
     temperature,
     systemPrompt: buildSummarySystemPrompt(),
     maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
-  }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+  }, { timeoutMs: debateMode.summaryTimeoutMs });
 
   if (!summaryResponse.ok) {
     const reason = summaryResponse.message || "Lead Arbiter model unavailable.";
@@ -1679,7 +1689,7 @@ function applyWorkingAccess(models, access) {
   });
 }
 
-function buildDebatePool(debateModels, selectedSummary, access) {
+function buildDebatePool(debateModels, selectedSummary, maxModels = DEBATE_MODES.fast.maxModels) {
   const normalizedDebates = Array.isArray(debateModels) ? debateModels : [];
   const filtered = dedupeModels(
     normalizedDebates
@@ -1687,7 +1697,7 @@ function buildDebatePool(debateModels, selectedSummary, access) {
       .filter((model) => isChatCapableModel(model.id))
       .filter((model) => model.isDebateParticipant && model.key !== selectedSummary.key),
   );
-  const capped = shuffleAndCap(filtered, MAX_DEBATE_MODELS);
+  const capped = shuffleAndCap(filtered, Math.max(1, Number(maxModels) || DEBATE_MODES.fast.maxModels));
   return assignDebateBiasTeams(capped);
 }
 

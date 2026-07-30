@@ -2,9 +2,11 @@ const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const { getAdminSettings, getFirestore } = require("../lib/firebase-admin");
 const { getSummaryKnowledge, getDebateKnowledge } = require("../lib/smc-knowledge");
 const DEBATE_MODES = {
-  fast: { maxModels: 6, concurrency: 6, timeoutMs: 18000 },
-  deep: { maxModels: 20, concurrency: 10, timeoutMs: 25000 },
-  full: { maxModels: 35, concurrency: 12, timeoutMs: 25000 },
+  // A bounded default prevents the client request from aborting before a council
+  // or final arbiter can respond. Larger modes remain an explicit opt-in.
+  fast: { maxModels: 4, concurrency: 4, timeoutMs: 15000 },
+  deep: { maxModels: 12, concurrency: 6, timeoutMs: 25000 },
+  full: { maxModels: 35, concurrency: 10, timeoutMs: 25000 },
 };
 
 async function runWithConcurrency(items, limit, workerFn) {
@@ -118,7 +120,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const debateMode = body.debateMode || settings?.debateMode || "full";
+  const debateMode = body.debateMode || settings?.debateMode || "fast";
   const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.deep;
 
   const debatePool = buildDebatePool(debateModels, selectedSummary, mode.maxModels);
