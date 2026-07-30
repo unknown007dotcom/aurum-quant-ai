@@ -61,31 +61,69 @@ server.listen(PORT, () => {
   console.log(`Aurum Quant AI running at http://localhost:${PORT}`);
 });
 
+const CLOUDFLARE_BACKEND = process.env.CLOUDFLARE_WORKER_URL || "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
+
 async function serveApiRoute(nodeReq, nodeRes, requestUrl) {
   const relativeRoute = requestUrl.pathname.replace(/^\/api\//, "");
-  const filePath = path.join(API_ROOT, `${relativeRoute}.js`);
-  const normalizedPath = path.normalize(filePath);
+  const targetUrl = `${CLOUDFLARE_BACKEND}/${relativeRoute}${requestUrl.search}`;
 
-  if (!normalizedPath.startsWith(API_ROOT) || !fs.existsSync(normalizedPath)) {
-    return sendJson(nodeRes, 404, { message: "API route not found." });
+  try {
+    const headers = { ...nodeReq.headers };
+    delete headers.host;
+
+    const body = nodeReq.method !== "GET" && nodeReq.method !== "HEAD"
+      ? await readRawBody(nodeReq)
+      : undefined;
+
+    const cfRes = await fetch(targetUrl, {
+      method: nodeReq.method,
+      headers,
+      body,
+    });
+
+    nodeRes.statusCode = cfRes.status;
+    cfRes.headers.forEach((val, key) => {
+      if (key.toLowerCase() !== "transfer-encoding") {
+        nodeRes.setHeader(key, val);
+      }
+    });
+
+    const buffer = Buffer.from(await cfRes.arrayBuffer());
+    nodeRes.end(buffer);
+  } catch (cfErr) {
+    // If Cloudflare Worker proxy fails, fall back to local handler if present
+    const filePath = path.join(API_ROOT, `${relativeRoute}.js`);
+    const normalizedPath = path.normalize(filePath);
+
+    if (!normalizedPath.startsWith(API_ROOT) || !fs.existsSync(normalizedPath)) {
+      return sendJson(nodeRes, 502, { message: `Cloudflare Worker unreachable: ${cfErr.message}` });
+    }
+
+    delete require.cache[require.resolve(normalizedPath)];
+    const handler = require(normalizedPath);
+
+    if (typeof handler !== "function") {
+      return sendJson(nodeRes, 500, { message: "Invalid API handler export." });
+    }
+
+    nodeReq.query = Object.fromEntries(requestUrl.searchParams.entries());
+    nodeReq.body = await readJsonBody(nodeReq);
+
+    const responseAdapter = createResponseAdapter(nodeRes);
+    await handler(nodeReq, responseAdapter);
+
+    if (!responseAdapter.finished) {
+      responseAdapter.end();
+    }
   }
+}
 
-  delete require.cache[require.resolve(normalizedPath)];
-  const handler = require(normalizedPath);
-
-  if (typeof handler !== "function") {
-    return sendJson(nodeRes, 500, { message: "Invalid API handler export." });
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
   }
-
-  nodeReq.query = Object.fromEntries(requestUrl.searchParams.entries());
-  nodeReq.body = await readJsonBody(nodeReq);
-
-  const responseAdapter = createResponseAdapter(nodeRes);
-  await handler(nodeReq, responseAdapter);
-
-  if (!responseAdapter.finished) {
-    responseAdapter.end();
-  }
+  return chunks.length ? Buffer.concat(chunks) : undefined;
 }
 
 function createResponseAdapter(nodeRes) {

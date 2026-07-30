@@ -1,5 +1,5 @@
 const { getFirestore } = require("../lib/firebase-admin");
-const DEFAULT_BASE = "https://aurum-quant-ai.vercel.app";
+const DEFAULT_BASE = "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 
 module.exports = async function handler(req, res) {
   if (req.method === "POST") {
@@ -141,7 +141,7 @@ function hashFromString(value) {
 async function triggerAutoLearn(req) {
   const cronSecret = process.env.CRON_SECRET || "";
   const baseUrl = resolveBaseUrl(req);
-  await fetch(`${baseUrl}/api/auto-learn`, {
+  await fetch(`${baseUrl}/auto-learn`, {
     method: "POST",
     headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {},
   });

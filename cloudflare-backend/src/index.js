@@ -11,9 +11,10 @@ const MAX_DEBATE_MODELS = 35;
 const DEFAULT_DEBATE_MAX_TOKENS = 750;
 const DEFAULT_SUMMARY_MAX_TOKENS = 2200;
 const ALLOWED_ORIGINS = [
-  "https://aurum-quant-ai.vercel.app",
+  "https://aurum-quant-edge.aurum-quant-ai.workers.dev",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  "http://127.0.0.1:8787",
 ];
 
 const GRANULARITY_MAP = {

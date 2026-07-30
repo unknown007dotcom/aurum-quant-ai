@@ -1,6 +1,6 @@
 const { getAdminSettings, getFirestore } = require("../lib/firebase-admin");
 
-const DEFAULT_BASE = "https://aurum-quant-ai.vercel.app";
+const DEFAULT_BASE = "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 
 module.exports = async function handler(req, res) {
   const cronAuth = process.env.CRON_SECRET || "";
@@ -25,7 +25,7 @@ module.exports = async function handler(req, res) {
 
     const timeframe = "15min";
     const baseUrl = process.env.AUTO_ANALYZE_BASE_URL || DEFAULT_BASE;
-    const marketResp = await fetch(`${baseUrl}/api/market-data?interval=${encodeURIComponent(timeframe)}&outputsize=5000&symbol=XAU%2FUSD`);
+    const marketResp = await fetch(`${baseUrl}/market-data?interval=${encodeURIComponent(timeframe)}&outputsize=5000&symbol=XAU%2FUSD`);
     const marketData = await marketResp.json().catch(() => ({}));
     if (!marketResp.ok || !Array.isArray(marketData.values) || marketData.values.length < 50) {
       throw new Error(marketData?.message || `Market data failed (${marketResp.status}).`);
@@ -57,7 +57,7 @@ module.exports = async function handler(req, res) {
       "Return only concise trade summary with headings: Summary, Direction, Entry Zone, Invalidation, Risk Note.",
     ].join("\n");
 
-    const aiResp = await fetch(`${baseUrl}/api/ai-decision`, {
+    const aiResp = await fetch(`${baseUrl}/ai-decision`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -107,7 +107,7 @@ module.exports = async function handler(req, res) {
 
     // Trigger autonomous post-mortem learning pass after saving a new automated signal.
     const cronSecret = process.env.CRON_SECRET || "";
-    fetch(`${baseUrl}/api/auto-learn`, {
+    fetch(`${baseUrl}/auto-learn`, {
       method: "POST",
       headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {},
     }).catch(() => {});

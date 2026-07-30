@@ -22,8 +22,8 @@ import("./modules/analysis-engine.js").then(mod => {
 const STORAGE_KEY = "xauusd-analyzer-settings-v1";
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
 const DEVICE_ID_KEY = "xauusd-device-id-v1";
-const EDGE_API_BASE = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
-    ? (window.location.port === "3000" ? "/api" : "http://127.0.0.1:8787")
+const EDGE_API_BASE = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && window.location.port === "8787")
+    ? "http://127.0.0.1:8787"
     : "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 const APP_CONFIG = {
   marketMtfPath: "/market-mtf",
@@ -99,9 +99,6 @@ let state = {
 
 function apiUrl(path) {
   const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${String(path || "")}`;
-  if (cleanPath.startsWith("/settings") || cleanPath.startsWith("/ai-decision") || cleanPath.startsWith("/auto-learn")) {
-    return `/api${cleanPath}`;
-  }
   const cleanBase = String(EDGE_API_BASE || "").replace(/\/+$/, "");
   return `${cleanBase}${cleanPath}`;
 }
@@ -1423,24 +1420,21 @@ async function runAnalysis() {
         const symbol = encodeURIComponent(state.botInstrument || "XAU_USD");
 
         // --- Step 1: Fetch market data ---
-        // PRIMARY: Hit the Cloudflare Worker (which uses KV-cached candle data from OANDA)
-        // FALLBACK: Hit the local Node.js server (which fetches directly from OANDA, no KV cache)
+        // Single Backend Path: Cloudflare Worker (KV edge cache + live feed)
         let res, mtfData;
         const queryParams = `symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
         const cloudflareUrl = `${EDGE_API_BASE}${APP_CONFIG.marketMtfPath}?${queryParams}`;
-        const localFallbackUrl = `/api${APP_CONFIG.marketMtfPath}?${queryParams}`;
         let fetchSuccess = false;
         let primaryErrMessage = "";
         let dataSource = "";
 
-        // --- Attempt 1: Cloudflare Worker (has KV edge cache with growing candle history) ---
         try {
             res = await fetch(cloudflareUrl);
             if (res.ok) {
                 mtfData = await res.json().catch(() => ({}));
                 if (mtfData && Array.isArray(mtfData.data)) {
                     fetchSuccess = true;
-                    dataSource = `Cloudflare KV (${res.headers.get("X-Cache") || "LIVE"})`;
+                    dataSource = `Cloudflare Worker KV (${res.headers.get("X-Cache") || "LIVE"})`;
                 } else {
                     primaryErrMessage = "Cloudflare: Malformed data payload (missing data array)";
                 }
@@ -1452,36 +1446,12 @@ async function runAnalysis() {
             primaryErrMessage = `Cloudflare: ${fetchErr.message}`;
         }
 
-        // --- Attempt 2: Local server fallback (direct OANDA fetch, no KV cache) ---
-        if (!fetchSuccess) {
-            console.warn(`Cloudflare Worker failed (${primaryErrMessage}). Falling back to local server...`);
-            try {
-                res = await fetch(localFallbackUrl);
-                if (res.ok) {
-                    mtfData = await res.json().catch(() => ({}));
-                    if (mtfData && Array.isArray(mtfData.data)) {
-                        fetchSuccess = true;
-                        dataSource = "Local Server (OANDA Direct)";
-                    } else {
-                        primaryErrMessage += ` | Local: Malformed data payload`;
-                    }
-                } else {
-                    const errPayload = await res.json().catch(() => ({}));
-                    primaryErrMessage += ` | Local HTTP ${res.status}: ${errPayload?.message || errPayload?.errorMessage || "Unknown error"}`;
-                }
-            } catch (fallbackErr) {
-                primaryErrMessage += ` | Local: ${fallbackErr.message}`;
-            }
-        }
-
         if (fetchSuccess) {
             console.log(`✅ Market data loaded from: ${dataSource}`);
-        }
-
-        if (!fetchSuccess) {
+        } else {
             showAnalysisError(
                 "Market Data Unreachable",
-                `Failed to fetch market data from both Cloudflare and Vercel/local backends.\n\nErrors encountered:\n${primaryErrMessage}\n\nPlease check your configuration and network connection.`
+                `Failed to fetch market data from Cloudflare backend.\n\nError encountered:\n${primaryErrMessage}\n\nPlease check your Cloudflare Worker configuration and network connection.`
             );
             return;
         }
@@ -2826,10 +2796,8 @@ async function runLiquidityScanSilent() {
         let res, mtfData;
         const queryParams = `symbol=${symbol}&entryTf=${state.selectedTimeframe}&outputsize=${state.candleCount || 1000}`;
         const cloudflareUrl = `${EDGE_API_BASE}${APP_CONFIG.marketMtfPath}?${queryParams}`;
-        const localFallbackUrl = `/api${APP_CONFIG.marketMtfPath}?${queryParams}`;
         let fetchSuccess = false;
 
-        // Attempt 1: Cloudflare Worker (KV-cached candle data)
         try {
             res = await fetch(cloudflareUrl);
             if (res.ok) {
@@ -2839,22 +2807,7 @@ async function runLiquidityScanSilent() {
                 }
             }
         } catch (e) {
-            // Cloudflare failed, try local fallback
-        }
-
-        // Attempt 2: Local server fallback (direct OANDA, no KV cache)
-        if (!fetchSuccess) {
-            try {
-                res = await fetch(localFallbackUrl);
-                if (res.ok) {
-                    mtfData = await res.json().catch(() => ({}));
-                    if (mtfData && Array.isArray(mtfData.data)) {
-                        fetchSuccess = true;
-                    }
-                }
-            } catch (e) {
-                // Both failed
-            }
+            // Cloudflare request error
         }
 
         if (!fetchSuccess || !mtfData) return;

@@ -1,6 +1,6 @@
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
-const EDGE_API_BASE = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
-    ? (window.location.port === "3000" ? "/api" : "http://127.0.0.1:8787")
+const EDGE_API_BASE = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && window.location.port === "8787")
+    ? "http://127.0.0.1:8787"
     : "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 const HISTORY_API_PATH = "/history-log";
 

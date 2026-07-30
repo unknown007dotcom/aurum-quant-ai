@@ -1,6 +1,6 @@
 const { getFirestore, getAdminSettings } = require("../lib/firebase-admin");
 
-const DEFAULT_BASE = "https://aurum-quant-ai.vercel.app";
+const DEFAULT_BASE = "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
 const MAX_SCAN_ITEMS = 120;
 const MAX_FAILURE_DEBATE_PER_RUN = 2;
 const MAX_DEBATE_MODELS = 12;
@@ -164,7 +164,7 @@ module.exports = async function handler(req, res) {
 async function fetchCandles(baseUrl, timeframe) {
   const interval = timeframeToInterval(timeframe);
   const resp = await fetch(
-    `${baseUrl}/api/market-data?interval=${encodeURIComponent(interval)}&outputsize=5000&symbol=XAU%2FUSD`,
+    `${baseUrl}/market-data?interval=${encodeURIComponent(interval)}&outputsize=5000&symbol=XAU%2FUSD`,
   );
   const payload = await resp.json().catch(() => ({}));
   if (!resp.ok || !Array.isArray(payload.values)) {
