@@ -2,6 +2,7 @@ const path = require("node:path");
 
 const routes = {
   "ai-decision": require("../api-handlers/ai-decision"),
+  "ai-health": require("../api-handlers/ai-health"),
   "auto-analyze": require("../api-handlers/auto-analyze"),
   "auto-learn": require("../api-handlers/auto-learn"),
   "bot": require("../api-handlers/bot"),

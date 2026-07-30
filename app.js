@@ -1487,7 +1487,7 @@ async function runAnalysis() {
 
         let aiRes, aiData;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 90000);
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
         try {
             aiRes = await fetch(`${EDGE_API_BASE}${APP_CONFIG.aiChatPath}`, {
                 method: "POST",
@@ -1500,6 +1500,7 @@ async function runAnalysis() {
                     baseUrl: selectedModel?.baseUrl,
                     models: state.models,
                     debateModels: state.debateModels,
+                    debateMode: state.debateMode || "fast",
                     temperature: state.temperature,
                     prompt
                 }),
@@ -1509,9 +1510,10 @@ async function runAnalysis() {
             aiData = await aiRes.json().catch(() => ({}));
         } catch (aiErr) {
             clearTimeout(timeoutId);
-            // AI network failed — render deterministic fallback so panel is never blank
-            dom.setStatus(`Market analysis complete. AI offline: ${aiErr.message}`);
-            const fallbackPayload = buildLocalAiFallback(analysis, `AI model unreachable: ${aiErr.message}`);
+            const isTimeout = aiErr.name === "AbortError";
+            const failReason = isTimeout ? "Browser request timed out (exceeded 60s safety limit)." : `AI network failed: ${aiErr.message}`;
+            dom.setStatus(`Market analysis complete. ${failReason}`);
+            const fallbackPayload = buildLocalAiFallback(analysis, failReason);
             renderAiUI(fallbackPayload, analysis);
             syncHistory(analysis, fallbackPayload);
             refreshBotStatus().catch(() => {});
@@ -1521,19 +1523,25 @@ async function runAnalysis() {
         // Worker may return a fallback payload with choices[] even on non-200
         const hasFallback = Array.isArray(aiData?.choices) && aiData.choices.length > 0;
         if (!aiRes.ok && !hasFallback) {
-            dom.setStatus(`AI unavailable (${aiRes.status}): ${aiData?.message || "Check API keys in Settings."}`);
-            const fallbackPayload = buildLocalAiFallback(analysis, `Server error ${aiRes.status}: ${aiData?.message || 'Check API keys.'}`);
+            const serverMsg = aiData?.message || aiData?.fallbackReason || "Check API keys in Settings.";
+            const failReason = parseSpecificAiFailureReason(aiRes.status, serverMsg);
+            dom.setStatus(`AI unavailable (${aiRes.status}): ${failReason}`);
+            const fallbackPayload = buildLocalAiFallback(analysis, failReason);
             renderAiUI(fallbackPayload, analysis);
             syncHistory(analysis, fallbackPayload);
             refreshBotStatus().catch(() => {});
             return;
         }
 
+        if (aiData?.fallbackReason) {
+            dom.setStatus(`AI Arbiter: ${aiData.fallbackReason}`);
+        } else {
+            dom.setStatus(`Preview complete | RMI: ${state.currentRmi} | Bias: ${state.rmiBias}`);
+        }
+
         renderAiUI(aiData, analysis);
         syncHistory(analysis, aiData);
         refreshBotStatus().catch(() => {});
-
-        dom.setStatus(`Preview complete | RMI: ${state.currentRmi} | Bias: ${state.rmiBias}`);
     } catch (e) {
         showAnalysisError("Unexpected Error", e.message || String(e));
         console.error("runAnalysis error:", e);
@@ -2049,6 +2057,124 @@ function buildLocalScorecard(analysis, isFlat) {
 function clampScore(value) {
     const parsed = Number(value);
     return Math.max(0, Math.min(100, Math.round(Number.isFinite(parsed) ? parsed : 0)));
+}
+
+function escapeHtml(str) {
+    if (typeof str !== "string") return String(str || "");
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function parseSpecificAiFailureReason(status, message) {
+    const text = String(message || "").toLowerCase();
+    if (status === 401 || status === 403 || text.includes("key rejected") || text.includes("unauthorized") || text.includes("invalid api key")) {
+        return "NVIDIA key rejected. Verify your API key in Settings.";
+    }
+    if (text.includes("missing") || text.includes("no configured api key")) {
+        return "NVIDIA key missing. Save your NVIDIA API key in Settings.";
+    }
+    if (status === 404 || text.includes("model not available") || text.includes("catalog")) {
+        return "Selected model unavailable for this NVIDIA key. Import and select an active model in Settings.";
+    }
+    if (status === 429 || text.includes("rate limit") || text.includes("quota")) {
+        return "NVIDIA quota/rate limit reached. Please wait before retrying.";
+    }
+    if (status === 504 || text.includes("timed out") || text.includes("timeout")) {
+        return "NVIDIA request timed out.";
+    }
+    if (status === 502 || text.includes("worker")) {
+        return "Cloudflare Worker timeout or gateway error.";
+    }
+    return message || `Server error ${status}`;
+}
+
+function showDebateCouncilModal() {
+    const lastResult = state.lastAiResult?.ai || {};
+    const debateResponses = lastResult.debateResponses || [];
+    const debateMetrics = lastResult.debateMetrics || [];
+    const debateConsensus = lastResult.debateConsensus || { buy: 0, sell: 0, wait: 0 };
+    const fallbackReason = lastResult.fallbackReason || "";
+
+    let modal = document.getElementById("debateCouncilModal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "debateCouncilModal";
+        modal.className = "modal-backdrop";
+        document.body.appendChild(modal);
+    }
+
+    let warningBanner = "";
+    if (fallbackReason === "Debate completed, but final synthesis failed.") {
+        warningBanner = `<div class="alert alert-warning" style="background:#451a03;border:1px solid #f59e0b;color:#fef3c7;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:0.85rem;">
+            ⚠️ <strong>Debate completed, but final synthesis failed.</strong> Individual debate participant responses are displayed below.
+        </div>`;
+    } else if (fallbackReason) {
+        warningBanner = `<div class="alert alert-info" style="background:#1e293b;border:1px solid #3b82f6;color:#93c5fd;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:0.85rem;">
+            ℹ️ <strong>Notice:</strong> ${escapeHtml(fallbackReason)}
+        </div>`;
+    }
+
+    let metricsHtml = "";
+    if (Array.isArray(debateMetrics) && debateMetrics.length > 0) {
+        metricsHtml = `<div style="margin-bottom:16px;">
+            <h5 style="margin:0 0 8px 0;font-size:0.9rem;color:var(--text-muted,#94a3b8);">Debate Model Status & Timings</h5>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:8px;">
+                ${debateMetrics.map(m => `
+                    <div style="background:var(--card-bg,#1e293b);padding:8px 12px;border-radius:6px;border:1px solid ${m.success ? '#22c55e44' : '#ef444444'};font-size:0.8rem;">
+                        <div style="font-weight:600;color:var(--text,#f8fafc);">${escapeHtml(m.modelLabel)}</div>
+                        <div style="color:var(--muted,#94a3b8);margin-top:2px;">
+                            Role: ${m.role} | ${m.success ? `<span style="color:#22c55e;">✓ ${m.durationMs}ms</span>` : `<span style="color:#ef4444;">✗ ${m.sanitizedError || 'Failed'}</span>`}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    }
+
+    let responsesHtml = "";
+    if (debateResponses.length > 0) {
+        responsesHtml = debateResponses.map(d => `
+            <div style="background:var(--card-bg,#1e293b);padding:12px;border-radius:8px;margin-bottom:10px;border:1px solid var(--border,#334155);">
+                <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                    <strong style="color:#38bdf8;">${escapeHtml(d.modelLabel || d.modelId)}</strong>
+                    <span style="font-size:0.75rem;padding:2px 6px;border-radius:4px;background:#334155;color:#f8fafc;">${escapeHtml(d.bias || "both").toUpperCase()}</span>
+                </div>
+                <div style="font-size:0.85rem;white-space:pre-wrap;color:#cbd5e1;line-height:1.4;">${escapeHtml(d.output || "No output")}</div>
+            </div>
+        `).join("");
+    } else {
+        responsesHtml = `<p style="color:var(--muted,#94a3b8);font-size:0.85rem;">No active debate participant responses recorded for this run.</p>`;
+    }
+
+    modal.innerHTML = `
+        <div class="modal-content" style="background:#0f172a;max-width:700px;width:90%;max-height:85vh;overflow-y:auto;padding:24px;border-radius:12px;border:1px solid #334155;color:#f8fafc;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h3 style="margin:0;font-size:1.2rem;">🏛️ Debate Council Analysis</h3>
+                <button onclick="document.getElementById('debateCouncilModal').style.display='none'" style="background:none;border:none;color:#94a3b8;font-size:1.5rem;cursor:pointer;">&times;</button>
+            </div>
+            ${warningBanner}
+            <div style="display:flex;gap:12px;margin-bottom:16px;">
+                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
+                    <div style="font-size:0.75rem;color:#94a3b8;">BUY VOTES</div>
+                    <div style="font-size:1.2rem;font-weight:bold;color:#22c55e;">${debateConsensus.buy || 0}</div>
+                </div>
+                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
+                    <div style="font-size:0.75rem;color:#94a3b8;">SELL VOTES</div>
+                    <div style="font-size:1.2rem;font-weight:bold;color:#ef4444;">${debateConsensus.sell || 0}</div>
+                </div>
+                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
+                    <div style="font-size:0.75rem;color:#94a3b8;">WAIT VOTES</div>
+                    <div style="font-size:1.2rem;font-weight:bold;color:#f59e0b;">${debateConsensus.wait || 0}</div>
+                </div>
+            </div>
+            ${metricsHtml}
+            <h4 style="margin:16px 0 8px 0;font-size:0.95rem;">Model Outputs</h4>
+            ${responsesHtml}
+            <div style="margin-top:20px;text-align:right;">
+                <button onclick="document.getElementById('debateCouncilModal').style.display='none'" style="background:#334155;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;">Close</button>
+            </div>
+        </div>
+    `;
+    modal.style.display = "block";
 }
 
 function normalizeGrade(value) {

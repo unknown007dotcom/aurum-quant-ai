@@ -5,11 +5,11 @@ const HISTORY_LIMIT = 150;
 const MIN_DEPTH = 0.10;
 
 // --- Debate Council & Learning Memory Constants ---
-const DEBATE_MAX_WAIT_MS = 25000;
-const SUMMARY_MAX_WAIT_MS = 35000;
-const MAX_DEBATE_MODELS = 35;
-const DEFAULT_DEBATE_MAX_TOKENS = 750;
-const DEFAULT_SUMMARY_MAX_TOKENS = 2200;
+const DEBATE_MODES = {
+  fast: { maxModels: 4, concurrency: 4, timeoutMs: 12000, arbiterTimeoutMs: 22000, debateMaxTokens: 300, arbiterMaxTokens: 1200 },
+  deep: { maxModels: 12, concurrency: 8, timeoutMs: 22000, arbiterTimeoutMs: 35000, debateMaxTokens: 500, arbiterMaxTokens: 1800 },
+  full: { maxModels: 35, concurrency: 12, timeoutMs: 25000, arbiterTimeoutMs: 45000, debateMaxTokens: 750, arbiterMaxTokens: 2200 },
+};
 const ALLOWED_ORIGINS = [
   "https://aurum-quant-edge.aurum-quant-ai.workers.dev",
   "http://localhost:3000",
@@ -225,6 +225,9 @@ export default {
       if (url.pathname === "/ai-decision" && request.method === "POST") {
         return jsonResponse(await handleAiDecision(request, env), request);
       }
+      if (url.pathname === "/ai-health" && request.method === "GET") {
+        return jsonResponse(await handleAiHealth(request, env), request);
+      }
       if (url.pathname === "/learning-context" && request.method === "GET") {
         return jsonResponse(await loadLearningContext(env), request);
       }
@@ -431,6 +434,9 @@ function resolveBestModelReplacement(modelId, availableModels) {
 }
 
 async function handleAiDecision(request, env) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const startedAt = Date.now();
+
   const body = await request.json().catch(() => ({}));
   const prompt = String(body.prompt || "").trim();
   if (!prompt) {
@@ -477,12 +483,31 @@ async function handleAiDecision(request, env) {
     baseUrl: String(body.baseUrl || DEFAULT_BASE_URL),
   }, globalNvidiaKeys, 0);
 
+  const logTiming = (fallbackUsed, fallbackReason, debateAttempted = 0, debateSuccessful = 0) => {
+    const finishedAt = Date.now();
+    console.log("[AI-DECISION-LOG]", JSON.stringify({
+      requestId,
+      startedAt: new Date(startedAt).toISOString(),
+      finishedAt: new Date(finishedAt).toISOString(),
+      durationMs: finishedAt - startedAt,
+      debateMode: body.debateMode || "fast",
+      debateModelsAttempted: debateAttempted,
+      debateModelsSuccessful: debateSuccessful,
+      leadModel: fallbackModelConfig?.id || "unknown",
+      providerStatus: candidateKeys.length ? "healthy" : "no_keys",
+      fallbackUsed,
+      fallbackReason,
+    }));
+  };
+
   if (!candidateKeys.length) {
+    logTiming(true, "No API keys configured.", 0, 0);
     return {
       ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: "No configured AI model or API key. Save your NVIDIA API key in Admin Settings." }), "server-fallback"),
       debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
       learningMemoryUsed, fallbackUsed: true,
       fallbackReason: "No API keys configured.",
+      debateMetrics: [],
     };
   }
 
@@ -490,12 +515,14 @@ async function handleAiDecision(request, env) {
   const baseUrl = String(fallbackModelConfig.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
   const access = await resolveWorkingNvidiaAccess(candidateKeys, baseUrl);
   if (!access.ok) {
+    logTiming(true, sanitizeProviderFailureReason(access.message), 0, 0);
     return {
       ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: access.message }), fallbackModelConfig.id || "server-fallback"),
       debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
       learningMemoryUsed, fallbackUsed: true,
       fallbackReason: sanitizeProviderFailureReason(access.message),
       keysAttempted: candidateKeys.length,
+      debateMetrics: [],
     };
   }
 
@@ -520,19 +547,24 @@ async function handleAiDecision(request, env) {
     : resolveBestModelReplacement(selectedSummary.id, access.models);
 
   if (!resolvedModelId) {
+    logTiming(true, "No available NVIDIA models.", 0, 0);
     return {
       ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: "No NVIDIA chat models are available to this key. Import NVIDIA models again from Settings." }), "server-fallback"),
       debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
       learningMemoryUsed, fallbackUsed: true,
       fallbackReason: "No available NVIDIA models.",
       keysAttempted: candidateKeys.length,
+      debateMetrics: [],
     };
   }
 
   selectedSummary.id = resolvedModelId;
 
+  const debateMode = body.debateMode || settings.debateMode || "fast";
+  const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.fast;
+
   // --- Build Debate Pool ---
-  const debatePool = buildDebatePool(debateModelPool, selectedSummary, access);
+  const debatePool = buildDebatePool(debateModelPool, selectedSummary, access, mode.maxModels);
 
   // --- No debate models: direct Lead Arbiter call ---
   if (!debatePool.length) {
@@ -541,20 +573,23 @@ async function handleAiDecision(request, env) {
       prompt: promptWithLearning,
       temperature,
       systemPrompt: buildSummarySystemPrompt(),
-      maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
-    }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+      maxTokens: mode.arbiterMaxTokens,
+    }, { timeoutMs: mode.arbiterTimeoutMs });
 
     if (!direct.ok) {
       const reason = direct.message || "Summary model unavailable.";
+      logTiming(true, sanitizeProviderFailureReason(reason), 0, 0);
       return {
         ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason }), selectedSummary.id),
         debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
         learningMemoryUsed, fallbackUsed: true,
         fallbackReason: sanitizeProviderFailureReason(reason),
         keysAttempted: candidateKeys.length,
+        debateMetrics: [],
       };
     }
 
+    logTiming(false, null, 0, 0);
     direct.payload = enforceDirectionalOutput(direct.payload, promptWithLearning);
     return {
       ...normalizeAiPayload(direct.payload, promptWithLearning),
@@ -563,6 +598,7 @@ async function handleAiDecision(request, env) {
       learningMemoryUsed, fallbackUsed: false,
       requestedModel: selectedSummary.label || selectedSummary.id,
       finalModel: selectedSummary.id,
+      debateMetrics: [],
     };
   }
 
@@ -570,21 +606,37 @@ async function handleAiDecision(request, env) {
   const debateResults = await Promise.all(
     debatePool.map(async (entry, index) => {
       if (index > 0) {
-        await new Promise((resolve) => setTimeout(resolve, index * 500));
+        await new Promise((resolve) => setTimeout(resolve, index * 100));
       }
-      return requestAiModel({
+      const startTime = Date.now();
+      const res = await requestAiModel({
         modelConfig: entry.modelConfig,
         prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
         temperature,
         systemPrompt: buildDebateSystemPrompt(),
-        maxTokens: DEFAULT_DEBATE_MAX_TOKENS,
-      }, { timeoutMs: DEBATE_MAX_WAIT_MS });
+        maxTokens: mode.debateMaxTokens,
+      }, { timeoutMs: mode.timeoutMs });
+      return { ...res, durationMs: Date.now() - startTime };
     })
   );
 
   const successfulDebates = debateResults
     .map((result, index) => ({ result, model: debatePool[index] }))
     .filter((item) => item.result.ok && extractAiText(item.result.payload));
+
+  const debateMetrics = debateResults.map((result, index) => {
+    const isSuccess = result.ok && Boolean(extractAiText(result.payload));
+    const modelConfig = debatePool[index]?.modelConfig;
+    return {
+      modelLabel: modelConfig?.label || modelConfig?.id || `Debate Model ${index + 1}`,
+      modelId: modelConfig?.id || "",
+      role: debatePool[index]?.bias || "both",
+      success: isSuccess,
+      statusCode: result.statusCode || (isSuccess ? 200 : 504),
+      durationMs: result.durationMs || 0,
+      sanitizedError: isSuccess ? null : sanitizeProviderFailureReason(result.message || "No usable output"),
+    };
+  });
 
   const debateConsensus = calculateDebateConsensus(successfulDebates);
 
@@ -595,10 +647,11 @@ async function handleAiDecision(request, env) {
       prompt: promptWithLearning,
       temperature,
       systemPrompt: buildSummarySystemPrompt(),
-      maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
-    }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+      maxTokens: mode.arbiterMaxTokens,
+    }, { timeoutMs: mode.arbiterTimeoutMs });
 
     if (directSummary.ok) {
+      logTiming(true, "Debate models timed out or failed; used direct summary.", debatePool.length, 0);
       directSummary.payload = enforceDirectionalOutput(directSummary.payload, promptWithLearning);
       return {
         ...normalizeAiPayload(directSummary.payload, promptWithLearning),
@@ -607,10 +660,12 @@ async function handleAiDecision(request, env) {
         fallbackUsed: true, fallbackReason: "Debate models timed out or failed; used direct summary.",
         requestedModel: selectedSummary.label || selectedSummary.id,
         finalModel: selectedSummary.id,
+        debateMetrics,
       };
     }
 
     const failReason = debateResults.map((r) => r.message).filter(Boolean).join(" | ") || directSummary.message || "All models timed out.";
+    logTiming(true, "All debate and summary models failed; server-generated summary used.", debatePool.length, 0);
     return {
       ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: failReason }), selectedSummary.id),
       debateUsed: false, debateAttempted: debatePool.length, debateSuccessful: 0, debateWorking: 0,
@@ -618,6 +673,7 @@ async function handleAiDecision(request, env) {
       fallbackUsed: true, fallbackReason: "All debate and summary models failed; server-generated summary used.",
       requestedModel: selectedSummary.label || selectedSummary.id,
       finalModel: selectedSummary.id,
+      debateMetrics,
     };
   }
 
@@ -628,20 +684,22 @@ async function handleAiDecision(request, env) {
     prompt: consolidatedPrompt,
     temperature,
     systemPrompt: buildSummarySystemPrompt(),
-    maxTokens: DEFAULT_SUMMARY_MAX_TOKENS,
-  }, { timeoutMs: SUMMARY_MAX_WAIT_MS });
+    maxTokens: mode.arbiterMaxTokens,
+  }, { timeoutMs: mode.arbiterTimeoutMs });
 
   if (!summaryResponse.ok) {
+    logTiming(true, "Debate completed, but final synthesis failed.", debatePool.length, successfulDebates.length);
     const reason = summaryResponse.message || "Lead Arbiter model unavailable.";
     return {
       ...createTextPayload(buildServerFallbackSummary(consolidatedPrompt, { reason }), selectedSummary.id),
       debateUsed: true, debateAttempted: debatePool.length, debateSuccessful: successfulDebates.length, debateWorking: successfulDebates.length,
       debateConsensus, learningMemoryUsed,
-      fallbackUsed: true, fallbackReason: sanitizeProviderFailureReason(reason),
+      fallbackUsed: true, fallbackReason: "Debate completed, but final synthesis failed.",
       requestedModel: selectedSummary.label || selectedSummary.id,
       finalModel: selectedSummary.id,
+      debateMetrics,
       debateResponses: successfulDebates.map(d => ({
-        modelLabel: d.model.modelConfig.label,
+        modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
         modelId: d.model.modelConfig.id,
         bias: d.model.bias,
         output: extractAiText(d.result.payload)
@@ -650,6 +708,7 @@ async function handleAiDecision(request, env) {
   }
 
   // --- Success: Return Full Debate Result ---
+  logTiming(false, null, debatePool.length, successfulDebates.length);
   summaryResponse.payload = enforceDirectionalOutput(summaryResponse.payload, consolidatedPrompt);
   return {
     ...normalizeAiPayload(summaryResponse.payload, consolidatedPrompt),
@@ -662,12 +721,47 @@ async function handleAiDecision(request, env) {
     fallbackUsed: false,
     requestedModel: selectedSummary.label || selectedSummary.id,
     finalModel: selectedSummary.id,
+    debateMetrics,
     debateResponses: successfulDebates.map(d => ({
-      modelLabel: d.model.modelConfig.label,
+      modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
       modelId: d.model.modelConfig.id,
       bias: d.model.bias,
       output: extractAiText(d.result.payload)
     }))
+  };
+}
+
+async function handleAiHealth(request, env) {
+  const settings = await loadSettings(env);
+  const globalNvidiaKeys = normalizeNvidiaKeyPool(settings.globalNvidiaApiKeys, settings.globalNvidiaApiKey);
+  if (env.NVIDIA_API_KEY) globalNvidiaKeys.push(env.NVIDIA_API_KEY);
+  
+  const keyConfigured = globalNvidiaKeys.length > 0;
+  if (!keyConfigured) {
+    return {
+      provider: "NVIDIA",
+      keyConfigured: false,
+      keyValid: false,
+      selectedModel: null,
+      selectedModelAvailable: false,
+      lastCheckedAt: Date.now(),
+      status: "unhealthy",
+      error: "NVIDIA API key missing."
+    };
+  }
+
+  const access = await resolveWorkingNvidiaAccess(globalNvidiaKeys, DEFAULT_BASE_URL);
+  const selectedModelId = access.models?.[0]?.id || "meta/llama-3.1-8b-instruct";
+
+  return {
+    provider: "NVIDIA",
+    keyConfigured: true,
+    keyValid: access.ok,
+    selectedModel: selectedModelId,
+    selectedModelAvailable: access.ok,
+    lastCheckedAt: Date.now(),
+    status: access.ok ? "healthy" : "unhealthy",
+    error: access.ok ? null : access.message || "Model access failed."
   };
 }
 

@@ -2,9 +2,9 @@ const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const { getAdminSettings, getFirestore } = require("../lib/firebase-admin");
 const { getSummaryKnowledge, getDebateKnowledge } = require("../lib/smc-knowledge");
 const DEBATE_MODES = {
-  fast: { maxModels: 6, concurrency: 6, timeoutMs: 18000 },
-  deep: { maxModels: 20, concurrency: 10, timeoutMs: 25000 },
-  full: { maxModels: 35, concurrency: 12, timeoutMs: 25000 },
+  fast: { maxModels: 4, concurrency: 4, timeoutMs: 12000, arbiterTimeoutMs: 22000, debateMaxTokens: 300, arbiterMaxTokens: 1200 },
+  deep: { maxModels: 12, concurrency: 8, timeoutMs: 22000, arbiterTimeoutMs: 35000, debateMaxTokens: 500, arbiterMaxTokens: 1800 },
+  full: { maxModels: 35, concurrency: 12, timeoutMs: 25000, arbiterTimeoutMs: 45000, debateMaxTokens: 750, arbiterMaxTokens: 2200 },
 };
 
 async function runWithConcurrency(items, limit, workerFn) {
@@ -13,13 +13,16 @@ async function runWithConcurrency(items, limit, workerFn) {
   async function runner() {
     while (nextIndex < items.length) {
       const currentIndex = nextIndex++;
+      const startTime = Date.now();
       try {
-        results[currentIndex] = await workerFn(items[currentIndex], currentIndex);
+        const res = await workerFn(items[currentIndex], currentIndex);
+        results[currentIndex] = { ...res, durationMs: Date.now() - startTime };
       } catch (error) {
         results[currentIndex] = {
           ok: false,
           statusCode: 500,
           message: error?.message || "Worker function failed",
+          durationMs: Date.now() - startTime,
         };
       }
     }
@@ -35,6 +38,9 @@ async function runWithConcurrency(items, limit, workerFn) {
 const modelCatalogCache = new Map();
 
 module.exports = async function handler(req, res) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const startedAt = Date.now();
+
   if (req.method !== "POST") {
     res.status(405).json({ message: "Method not allowed." });
     return;
@@ -89,6 +95,23 @@ module.exports = async function handler(req, res) {
     debateModels[0] ||
     fallbackModel;
 
+  const logTiming = (fallbackUsed, fallbackReason, debateAttempted = 0, debateSuccessful = 0) => {
+    const finishedAt = Date.now();
+    console.log("[AI-DECISION-LOG]", JSON.stringify({
+      requestId,
+      startedAt: new Date(startedAt).toISOString(),
+      finishedAt: new Date(finishedAt).toISOString(),
+      durationMs: finishedAt - startedAt,
+      debateMode: body.debateMode || "fast",
+      debateModelsAttempted: debateAttempted,
+      debateModelsSuccessful: debateSuccessful,
+      leadModel: selectedSummary?.id || "unknown",
+      providerStatus: access.ok ? "healthy" : "error",
+      fallbackUsed,
+      fallbackReason,
+    }));
+  };
+
   if (!selectedSummary?.id || !selectedSummary?.apiKey || (!access.ok && access.errorMessage) || (access.catalogAvailable && !access.modelIds.has(selectedSummary.id))) {
     const reason = access.errorMessage ||
       (selectedSummary?.id && access.catalogAvailable && !access.modelIds.has(selectedSummary.id)
@@ -99,15 +122,17 @@ module.exports = async function handler(req, res) {
       debateAttempted: 0,
       debateSuccessful: 0,
     });
+    logTiming(true, sanitizeProviderFailureReason(reason), 0, 0);
     res.setHeader("Cache-Control", "no-store");
     res.status(200).json({
       ...createTextPayload(fallbackText, selectedSummary?.id || "local-fallback"),
       debateUsed: false,
       fallbackUsed: true,
-      fallbackReason: "Summary provider not configured; server-generated summary used.",
+      fallbackReason: sanitizeProviderFailureReason(reason),
       debateAttempted: 0,
       debateSuccessful: 0,
       debateWorking: 0,
+      debateMetrics: [],
       meta: {
         debateUsed: false,
         debateAttempted: 0,
@@ -118,8 +143,8 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const debateMode = body.debateMode || settings?.debateMode || "full";
-  const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.deep;
+  const debateMode = body.debateMode || settings?.debateMode || "fast";
+  const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.fast;
 
   const debatePool = buildDebatePool(debateModels, selectedSummary, mode.maxModels);
   if (!debatePool.length) {
@@ -128,23 +153,25 @@ module.exports = async function handler(req, res) {
       prompt: promptWithLearning,
       temperature,
       systemPrompt: buildSummarySystemPrompt(),
-      maxTokens: 1500,
-    });
+      maxTokens: mode.arbiterMaxTokens,
+    }, { timeoutMs: mode.arbiterTimeoutMs });
     if (!direct.ok) {
       const fallbackText = buildServerFallbackSummary(promptWithLearning, {
         reason: direct.message || "Summary model unavailable.",
         debateAttempted: 0,
         debateSuccessful: 0,
       });
+      logTiming(true, sanitizeProviderFailureReason(direct.message || "Summary model unavailable."), 0, 0);
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({
         ...createTextPayload(fallbackText, selectedSummary.id),
         debateUsed: false,
         fallbackUsed: true,
-        fallbackReason: "Summary provider unavailable; server-generated summary used.",
+        fallbackReason: sanitizeProviderFailureReason(direct.message || "Summary model unavailable."),
         debateAttempted: 0,
         debateSuccessful: 0,
         debateWorking: 0,
+        debateMetrics: [],
         meta: {
           debateUsed: false,
           debateAttempted: 0,
@@ -154,6 +181,7 @@ module.exports = async function handler(req, res) {
       });
       return;
     }
+    logTiming(false, null, 0, 0);
     res.setHeader("Cache-Control", "no-store");
     direct.payload = enforceDirectionalOutput(direct.payload, promptWithLearning);
     res.status(200).json({
@@ -163,6 +191,7 @@ module.exports = async function handler(req, res) {
       debateAttempted: 0,
       debateSuccessful: 0,
       debateWorking: 0,
+      debateMetrics: [],
     });
     return;
   }
@@ -172,17 +201,16 @@ module.exports = async function handler(req, res) {
     mode.concurrency,
     async (entry, index) => {
       if (index > 0) {
-        await new Promise((resolve) => setTimeout(resolve, index * 150));
+        await new Promise((resolve) => setTimeout(resolve, index * 100));
       }
       let result = await requestAiModel({
         modelConfig: entry.modelConfig,
         prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
         temperature,
         systemPrompt: buildDebateSystemPrompt(),
-        maxTokens: 220,
+        maxTokens: mode.debateMaxTokens,
       }, { timeoutMs: mode.timeoutMs });
 
-      // Useful retry check
       const shouldRetry = !result.ok && (
         result.statusCode === 429 ||
         result.statusCode === 422 ||
@@ -199,7 +227,7 @@ module.exports = async function handler(req, res) {
           prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
           temperature,
           systemPrompt: buildDebateSystemPrompt(),
-          maxTokens: 220,
+          maxTokens: mode.debateMaxTokens,
         }, { timeoutMs: mode.timeoutMs });
       }
 
@@ -216,31 +244,29 @@ module.exports = async function handler(req, res) {
     (item) => item.result.ok && extractAiText(item.result.payload)
   );
 
-  const failedDebates = allDebateEntries
-    .filter((item) => !(item.result.ok && extractAiText(item.result.payload)))
-    .map((item) => ({
-      modelLabel: item.model?.modelConfig?.label || "",
+  const debateMetrics = allDebateEntries.map((item) => {
+    const isSuccess = item.result.ok && Boolean(extractAiText(item.result.payload));
+    return {
+      modelLabel: item.model?.modelConfig?.label || item.model?.modelConfig?.id || "Debate Model",
       modelId: item.model?.modelConfig?.id || "",
-      bias: item.model?.bias || "",
-      statusCode: item.result?.statusCode || null,
-      message: item.result?.message || "No usable output",
-      hasPayload: Boolean(item.result?.payload),
-      payloadPreview: item.result?.payload
-        ? JSON.stringify(item.result.payload).slice(0, 300)
-        : "",
-    }));
+      role: item.model?.bias || "both",
+      success: isSuccess,
+      statusCode: item.result?.statusCode || (isSuccess ? 200 : 504),
+      durationMs: item.result?.durationMs || 0,
+      sanitizedError: isSuccess ? null : sanitizeProviderFailureReason(item.result?.message || "No usable output"),
+    };
+  });
+
+  const failedDebates = debateMetrics.filter((m) => !m.success);
 
   const debateConsensus = { buy: 0, sell: 0, wait: 0 };
   successfulDebates.forEach(item => {
     const text = extractAiText(item.result.payload).toLowerCase();
     const bias = item.model?.bias || "";
-    // Use the assigned debate role as the primary consensus signal,
-    // fall back to final-line keyword scan only for "both" roles.
     if (bias === "bullish") { debateConsensus.buy++; }
     else if (bias === "bearish") { debateConsensus.sell++; }
     else if (bias === "redteam") { debateConsensus.wait++; }
     else {
-      // "both" role: scan the last 200 chars for the final verdict
       const tail = text.slice(-200);
       if (/\bbuy\b|\bbullish\b|\blong\b/i.test(tail)) debateConsensus.buy++;
       else if (/\bsell\b|\bbearish\b|\bshort\b/i.test(tail)) debateConsensus.sell++;
@@ -254,9 +280,10 @@ module.exports = async function handler(req, res) {
       prompt: promptWithLearning,
       temperature,
       systemPrompt: buildSummarySystemPrompt(),
-      maxTokens: 900,
-    }, { timeoutMs: 35000 });
+      maxTokens: mode.arbiterMaxTokens,
+    }, { timeoutMs: mode.arbiterTimeoutMs });
     if (directSummary.ok) {
+      logTiming(true, "Debate models timed out or failed; used direct summary.", debatePool.length, 0);
       res.setHeader("Cache-Control", "no-store");
       directSummary.payload = enforceDirectionalOutput(directSummary.payload, promptWithLearning);
       res.status(200).json({
@@ -268,6 +295,7 @@ module.exports = async function handler(req, res) {
         debateSuccessful: 0,
         debateWorking: 0,
         debateConsensus,
+        debateMetrics,
         debateFailures: failedDebates,
       });
       return;
@@ -278,6 +306,7 @@ module.exports = async function handler(req, res) {
       debateAttempted: debatePool.length,
       debateSuccessful: 0,
     });
+    logTiming(true, "All debate and summary models timed out; server-generated summary used.", debatePool.length, 0);
     res.setHeader("Cache-Control", "no-store");
     res.status(200).json({
       ...createTextPayload(fallbackText, selectedSummary.id),
@@ -288,6 +317,7 @@ module.exports = async function handler(req, res) {
       debateSuccessful: 0,
       debateWorking: 0,
       debateConsensus,
+      debateMetrics,
       debateFailures: failedDebates,
     });
     return;
@@ -299,8 +329,8 @@ module.exports = async function handler(req, res) {
     prompt: consolidatedPrompt,
     temperature,
     systemPrompt: buildSummarySystemPrompt(),
-    maxTokens: 2500,
-  }, { timeoutMs: 35000 });
+    maxTokens: mode.arbiterMaxTokens,
+  }, { timeoutMs: mode.arbiterTimeoutMs });
 
   if (!summaryResponse.ok) {
     const debateFallbackConfigs = successfulDebates.map((d) => d.model.modelConfig);
@@ -317,19 +347,21 @@ module.exports = async function handler(req, res) {
         debateAttempted: debatePool.length,
         debateSuccessful: successfulDebates.length,
       });
+      logTiming(true, "Debate completed, but final synthesis failed.", debatePool.length, successfulDebates.length);
       res.setHeader("Cache-Control", "no-store");
       res.status(200).json({
         ...createTextPayload(fallbackText, selectedSummary.id),
         debateUsed: true,
         fallbackUsed: true,
-        fallbackReason: "Both summary models timed out; server-generated summary used.",
+        fallbackReason: "Debate completed, but final synthesis failed.",
         debateAttempted: debatePool.length,
         debateSuccessful: successfulDebates.length,
         debateWorking: successfulDebates.length,
         debateConsensus,
+        debateMetrics,
         debateFailures: failedDebates,
         debateResponses: successfulDebates.map(d => ({
-          modelLabel: d.model.modelConfig.label,
+          modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
           modelId: d.model.modelConfig.id,
           bias: d.model.bias,
           output: extractAiText(d.result.payload)
@@ -337,20 +369,23 @@ module.exports = async function handler(req, res) {
       });
       return;
     }
+    logTiming(true, "Primary arbiter failed; secondary arbiter used.", debatePool.length, successfulDebates.length);
     res.setHeader("Cache-Control", "no-store");
     fallbackSummary.payload = enforceDirectionalOutput(fallbackSummary.payload, consolidatedPrompt);
     res.status(200).json({
       ...fallbackSummary.payload,
       debateUsed: true,
       fallbackUsed: true,
+      fallbackReason: "Primary arbiter failed; secondary arbiter used.",
       requestedModel: selectedSummary.label || selectedSummary.id,
       debateAttempted: debatePool.length,
       debateSuccessful: successfulDebates.length,
       debateWorking: successfulDebates.length,
       debateConsensus,
+      debateMetrics,
       debateFailures: failedDebates,
       debateResponses: successfulDebates.map(d => ({
-        modelLabel: d.model.modelConfig.label,
+        modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
         modelId: d.model.modelConfig.id,
         bias: d.model.bias,
         output: extractAiText(d.result.payload)
@@ -359,6 +394,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  logTiming(false, null, debatePool.length, successfulDebates.length);
   res.setHeader("Cache-Control", "no-store");
   summaryResponse.payload = enforceDirectionalOutput(summaryResponse.payload, consolidatedPrompt);
   res.status(200).json({
@@ -369,9 +405,10 @@ module.exports = async function handler(req, res) {
     debateSuccessful: successfulDebates.length,
     debateWorking: successfulDebates.length,
     debateConsensus,
+    debateMetrics,
     debateFailures: failedDebates,
     debateResponses: successfulDebates.map(d => ({
-      modelLabel: d.model.modelConfig.label,
+      modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
       modelId: d.model.modelConfig.id,
       bias: d.model.bias,
       output: extractAiText(d.result.payload)
