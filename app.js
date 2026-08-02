@@ -1950,22 +1950,42 @@ function renderAiUI(ai, analysis) {
         };
     }
 
-    // ── Determine final AI direction
-    const aiDirection = (data.researcher?.direction || "").trim();
-    const normalizedDirection = /buy|bull|long/i.test(aiDirection)  ? "Buy"
-                              : /sell|bear|short/i.test(aiDirection) ? "Sell"
-                              : "Stay Flat";
+    // ── Determine final AI direction & Conflict Detection
+    const ruleDirection = (analysis?.decision?.action || "").trim();
+    const rawAiDirection = (data.researcher?.direction || "").trim();
+    const normalizedAiDirection = /buy|bull|long/i.test(rawAiDirection)  ? "Buy"
+                                 : /sell|bear|short/i.test(rawAiDirection) ? "Sell"
+                                 : "Stay Flat";
+
+    // Check if Rule Engine and AI Arbiter actively conflict (e.g. Buy vs Sell)
+    const hasConflict = ruleDirection && normalizedAiDirection !== "Stay Flat" && ruleDirection !== "Stay Flat" && ruleDirection !== normalizedAiDirection;
+    const normalizedDirection = hasConflict ? "Stay Flat" : normalizedAiDirection;
     const isFlat = normalizedDirection === "Stay Flat";
 
-    // ── 1. Decision strip override (AI beats rule engine)
-    if (dom.get("#decisionLabel")) dom.get("#decisionLabel").textContent = normalizedDirection;
+    // ── 1. Decision strip override (AI beats rule engine, but conflict forces Stay Flat)
+    if (dom.get("#decisionLabel")) dom.get("#decisionLabel").textContent = hasConflict ? "⚠ CONFLICT — Stay Flat" : normalizedDirection;
     if (dom.get("#riskLabel"))     dom.get("#riskLabel").textContent = isFlat ? "Flat" : "Active";
-    if (dom.get("#aiBadge"))       dom.get("#aiBadge").textContent = "COMPLETE";
+    if (dom.get("#aiBadge")) {
+        dom.get("#aiBadge").textContent = hasConflict ? "CONFLICT" : "COMPLETE";
+    }
 
-    // ── 2. Model Interpretation panel — branches on Stay Flat vs Active
+    // ── 2. Model Interpretation panel — branches on Conflict vs Stay Flat vs Active
     const out = dom.get("#aiOutput");
     if (out) {
-        if (isFlat) {
+        if (hasConflict) {
+            out.textContent = [
+                "⚠ SIGNAL CONFLICT DETECTED — DO NOT TRADE",
+                "",
+                `Rule Engine Signal: ${ruleDirection}`,
+                `AI Arbiter Signal:  ${normalizedAiDirection}`,
+                "",
+                "Reason:",
+                "The Rule Engine and AI Arbiter disagree on trade direction. When technical indicators and contextual AI conflict, institutional safety rules mandate Stay Flat.",
+                "",
+                "What to watch for:",
+                "Wait for structure alignment where both Rule Engine and AI Arbiter agree on direction."
+            ].join("\n").trim();
+        } else if (isFlat) {
             const reason   = data.researcher?.summary || "Arbiter flagged this setup as invalid.";
             const watchFor = data.trader?.invalidation || "Monitor structure for a valid trigger.";
             const riskNote = data.researcher?.riskNote || "";

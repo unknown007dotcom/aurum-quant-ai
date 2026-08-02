@@ -25,6 +25,43 @@ try {
   console.warn("Failed to load .env file:", e.message);
 }
 
+// Validate environment variables on boot
+function validateEnvVars() {
+  const recommended = ["ADMIN_PASSWORD", "NVIDIA_API_KEY", "OANDA_API_TOKEN", "OANDA_ACCOUNT_ID"];
+  const missing = recommended.filter((varName) => !process.env[varName]);
+  if (missing.length > 0) {
+    console.warn(`[ENV NOTICE] Recommended environment variables not present in .env: ${missing.join(", ")}`);
+  } else {
+    console.log("[ENV OK] All core environment variables loaded.");
+  }
+}
+validateEnvVars();
+
+// Simple in-memory rate limiter for API endpoints (100 req / 15 min per IP)
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const MAX_REQUESTS_PER_WINDOW = 100;
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const clientData = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+
+  if (now > clientData.resetAt) {
+    clientData.count = 1;
+    clientData.resetAt = now + RATE_LIMIT_WINDOW_MS;
+  } else {
+    clientData.count += 1;
+  }
+
+  rateLimitStore.set(ip, clientData);
+  return {
+    allowed: clientData.count <= MAX_REQUESTS_PER_WINDOW,
+    current: clientData.count,
+    remaining: Math.max(0, MAX_REQUESTS_PER_WINDOW - clientData.count),
+    resetMs: clientData.resetAt - now,
+  };
+}
+
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
 const API_ROOT = path.join(ROOT, "api-handlers");
@@ -44,6 +81,16 @@ const server = http.createServer(async (req, res) => {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
 
     if (requestUrl.pathname.startsWith("/api/")) {
+      const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "127.0.0.1";
+      const rateCheck = checkRateLimit(clientIp);
+
+      res.setHeader("X-RateLimit-Limit", MAX_REQUESTS_PER_WINDOW);
+      res.setHeader("X-RateLimit-Remaining", rateCheck.remaining);
+
+      if (!rateCheck.allowed) {
+        return sendJson(res, 429, { message: "Too many requests. Please try again later." });
+      }
+
       return await serveApiRoute(req, res, requestUrl);
     }
 

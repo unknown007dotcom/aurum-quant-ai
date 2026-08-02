@@ -439,25 +439,36 @@ function buildServerFallbackSummary(promptText, meta = {}) {
     return match?.[1]?.trim() || "";
   };
 
-  const decisionLine = field(/Rule Engine Direction:\s*([^\n]+)/i) || "Stay Flat";
+  const decisionLine = field(/Rule Engine Direction:\s*([^\n]+)/i) || field(/Rule Engine Decision:\s*([^\n]+)/i) || "Stay Flat";
+  const confidenceMatch = /Confidence:\s*(\d+)/i.exec(text);
+  const confidence = confidenceMatch ? parseInt(confidenceMatch[1], 10) : 50;
+
   const priceLine = field(/Current Price:\s*([^\n]+)/i) || "n/a";
-  const timeframeLine = field(/Timeframe:\s*([^\n]+)/i) || "n/a";
   const trendLine = field(/Trend:\s*([^\n]+)/i) || "n/a";
   const rmiLine = field(/RMI:\s*([^\n]+)/i) || "n/a";
   const fvgs = field(/Fair Value Gaps:\s*([^\n]+)/i) || "none";
-  
-  const direction =
+
+  const rawDirection =
     /sell|bear/i.test(decisionLine) ? "Sell" :
     /buy|bull/i.test(decisionLine) ? "Buy" :
     "Stay Flat";
 
+  // Require >= 75% rule-engine confidence for fallback trade signals
+  const isHighConfidence = confidence >= 75;
+  const direction = (rawDirection !== "Stay Flat" && isHighConfidence) ? rawDirection : "Stay Flat";
   const isFlat = direction === "Stay Flat";
-  const summaryText = isFlat
-    ? "Local arbiter enforced Stay Flat using rule-engine confluence while the upstream AI model is unavailable."
-    : `Local arbiter accepted the ${direction} bias using rule-engine confluence while the upstream AI model is unavailable.`;
-    
+
+  let summaryText = "";
+  if (rawDirection !== "Stay Flat" && !isHighConfidence) {
+    summaryText = `AI unavailable. Rule engine confidence too low (${confidence}% < 75%). Conservative fallback enforced: Stay Flat.`;
+  } else if (!isFlat) {
+    summaryText = `AI unavailable. Using conservative fallback with ${confidence}% confidence: ${direction}.`;
+  } else {
+    summaryText = "Local arbiter enforced Stay Flat using rule-engine confluence while the upstream AI model is unavailable.";
+  }
+
   const fallbackReason = sanitizeProviderFailureReason(meta.reason);
-  const riskNoteText = `${fallbackReason} Local scorecard is deterministic and should be treated as a safety fallback, not an AI consensus.`;
+  const riskNoteText = `${fallbackReason} Local scorecard is deterministic (confidence: ${confidence}%) and should be treated as a safety fallback, not an AI consensus.`;
 
   return JSON.stringify({
     researcher: {
@@ -1028,7 +1039,7 @@ function buildDebateUserPrompt(basePrompt, bias) {
   let biasGuide = "";
   
   if (bias === "redteam") {
-    biasGuide = "Debate role: RED-TEAM CRITIC (Adversarial). Find reasons NOT to trade. Identify hidden traps: Gamma Traps (Price pinned at Max Pain), Options Walls, Inducement not swept, HTF supply/demand proximity, low-volume profile, or news risk. Be extremely skeptical. State the strongest counter-argument and the price level that would invalidate the current bias.";
+    biasGuide = "Debate role: RED-TEAM CRITIC (Adversarial Risk Auditor). Your job is to identify RISKS and structural threats, not to blindly veto trades. Rules: 1) Identify legitimate risks (news events, overbought/oversold conditions, fake order blocks, un-swept inducement). 2) Assign a Risk Score (LOW: 1-3, MEDIUM: 4-6, HIGH: 7-10). 3) Only recommend 'Stay Flat' if Risk Score is 8+ AND explicit structural invalidation exists. 4) State the specific price level or structural event that invalidates the trade.";
   } else if (bias === "bullish") {
     biasGuide = "Debate role: BULLISH TEAM. Prioritize bullish continuation/reversal evidence using SMC frameworks (CHoCH→BOS, OB, FVG, liquidity sweep, displacement). Challenge bearish assumptions but report invalidation honestly.";
   } else if (bias === "bearish") {
@@ -1047,7 +1058,7 @@ function buildDebateUserPrompt(basePrompt, bias) {
     "3) Entry/Trigger Zone (MUST provide exact price range from the data, ideally at OTE 70.5% of impulse)",
     "4) Target Levels (Specify T1, T2, T3 based on the nearest institutional liquidity pools/OB/FVG)",
     "5) Invalidation (structural close, not just wick)",
-    "6) Confluence Score (how many of: HTF aligned, OB, FVG, zone, sweep, Kill Zone, displacement)",
+    "6) Confluence Score & Risk Rating (1-10)",
   ].join("\n");
 }
 
@@ -1065,7 +1076,7 @@ function buildConsolidatedPrompt(basePrompt, successfulDebates) {
     "Parallel Debate Outputs (including Adversarial Red-Team):",
     sections.join("\n\n"),
     "",
-    "Task: As the Lead Arbiter, weigh the bullish, bearish, and RED-TEAM CRITIC evidence using the SMC/ICT/CRT framework. You MUST perform 'Adversarial Synthesis'—if the Red-Team identifies a critical structural trap (e.g., Gamma Trap at Max Pain), you MUST factor this heavily into your riskNote and final direction. Resolve conflicts by checking: 1) HTF structure alignment, 2) Premium/Discount zone, 3) Liquidity sweep, 4) Kill Zone timing, 5) Options Sentiment. Output one final direction. You MUST comply and output EXACTLY the JSON structure requested in the system prompt.",
+    "Task: As the Lead Arbiter, weigh the bullish, bearish, and RED-TEAM CRITIC evidence using the SMC/ICT/CRT framework. Factor the Red-Team's Risk Score proportionally into your riskNote—only enforce 'Stay Flat' if the Red-Team proves an extreme risk score (8+) with confirmed structural invalidation. Otherwise, allow valid directional setups to proceed with appropriate risk warnings. Resolve conflicts by checking: 1) HTF structure alignment, 2) Premium/Discount zone, 3) Liquidity sweep, 4) Kill Zone timing, 5) Options Sentiment. Output one final direction. You MUST comply and output EXACTLY the JSON structure requested in the system prompt.",
   ].join("\n");
 }
 
@@ -1114,7 +1125,7 @@ function enforceDirectionalOutput(payload, contextPrompt) {
     const summary = (data.researcher?.summary || "").toLowerCase();
     const direction = (data.researcher?.direction || "").toLowerCase();
 
-    const summaryIsNeutral = /stay flat|avoid|no trade|wait|not suitable|neutral/i.test(summary);
+    const summaryIsNeutral = /\bstay flat\b|\bno trade\b|\bdo not trade\b|\bno valid setup\b|\bno clear setup\b|\binvalid setup\b|\bavoid entering\b|\bavoid trading\b/i.test(summary);
     const directionIsBiased = /buy|sell|bull|bear|long|short/i.test(direction);
 
     if (summaryIsNeutral && directionIsBiased) {

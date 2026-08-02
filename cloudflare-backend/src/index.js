@@ -354,8 +354,8 @@ async function handleSettings(request, env) {
   const action = String(url.searchParams.get("action") || "");
   const settings = await loadSettings(env);
   const supplied = String(request.headers.get("x-admin-password") || "");
-  const adminPassword = String(env.ADMIN_PASSWORD || "Aviraj@api7").trim();
-  const isAdmin = supplied === adminPassword;
+  const adminPassword = String(env.ADMIN_PASSWORD || "").trim();
+  const isAdmin = adminPassword.length > 0 && supplied === adminPassword;
 
   if (request.method === "GET") {
     if (action === "metrics") {
@@ -2584,8 +2584,8 @@ function createTextPayload(text, modelId) {
 
 function assertAdmin(request, env) {
   const supplied = String(request.headers.get("x-admin-password") || "");
-  const adminPassword = String(env.ADMIN_PASSWORD || "Aviraj@api7").trim();
-  if (supplied !== adminPassword) {
+  const adminPassword = String(env.ADMIN_PASSWORD || "").trim();
+  if (!adminPassword || supplied !== adminPassword) {
     throw new Error("Unauthorized.");
   }
 }
