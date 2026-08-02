@@ -1604,6 +1604,31 @@ function buildLocalAiFallback(analysis, reason) {
     };
 }
 
+function parseSpecificAiFailureReason(statusCode, serverMsg) {
+    const msg = String(serverMsg || "").trim();
+    const code = Number(statusCode) || 0;
+    if (code === 401 || code === 403 || /rejected|unauthorized|forbidden|invalid.*key/i.test(msg)) {
+        return "NVIDIA API key rejected. Re-save a valid key in Admin Settings.";
+    }
+    if (code === 404 || /not found|model.*unavailable|not available/i.test(msg)) {
+        return "Configured NVIDIA model is not available. Import models again from Settings.";
+    }
+    if (code === 429 || /rate limit|too many/i.test(msg)) {
+        return "NVIDIA rate limit reached. Wait a moment and try again.";
+    }
+    if (code === 504 || /timeout|timed out/i.test(msg)) {
+        return "Cloudflare Worker timed out waiting for NVIDIA. Try again or switch to a faster model.";
+    }
+    if (code === 502 || /bad gateway|gateway error/i.test(msg)) {
+        return "Cloudflare Worker timeout or gateway error. Check Worker logs for crashes.";
+    }
+    if (code === 503 || /service unavailable/i.test(msg)) {
+        return "NVIDIA service temporarily unavailable. Try again shortly.";
+    }
+    if (msg) return msg;
+    return `AI provider returned HTTP ${code}. Check API keys in Settings.`;
+}
+
 function renderMarketUI(a) {
     const d = a.decision;
     if (dom.get("#decisionLabel")) dom.get("#decisionLabel").textContent = d.action;

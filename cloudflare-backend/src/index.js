@@ -3,6 +3,7 @@ const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_INSTRUMENT = "XAU_USD";
 const HISTORY_LIMIT = 150;
 const MIN_DEPTH = 0.10;
+const SUMMARY_MAX_WAIT_MS = 22000;
 
 // --- Debate Council & Learning Memory Constants ---
 const DEBATE_MODES = {
@@ -564,7 +565,7 @@ async function handleAiDecision(request, env) {
   const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.fast;
 
   // --- Build Debate Pool ---
-  const debatePool = buildDebatePool(debateModelPool, selectedSummary, access, mode.maxModels);
+  const debatePool = buildDebatePool(debateModelPool, selectedSummary, mode.maxModels);
 
   // --- No debate models: direct Lead Arbiter call ---
   if (!debatePool.length) {
@@ -1011,7 +1012,7 @@ async function runBotTick(env, options = {}) {
     latestPrice,
     action,
     reason,
-    orderResponse,
+    orderResponse: null,
     status: await getBotStatus(env),
   };
 }
@@ -1775,7 +1776,7 @@ function applyWorkingAccess(models, access) {
   });
 }
 
-function buildDebatePool(debateModels, selectedSummary, access) {
+function buildDebatePool(debateModels, selectedSummary, maxModels = 4) {
   const normalizedDebates = Array.isArray(debateModels) ? debateModels : [];
   const filtered = dedupeModels(
     normalizedDebates
@@ -1783,7 +1784,7 @@ function buildDebatePool(debateModels, selectedSummary, access) {
       .filter((model) => isChatCapableModel(model.id))
       .filter((model) => model.isDebateParticipant && model.key !== selectedSummary.key),
   );
-  const capped = shuffleAndCap(filtered, MAX_DEBATE_MODELS);
+  const capped = shuffleAndCap(filtered, maxModels);
   return assignDebateBiasTeams(capped);
 }
 
