@@ -1,3 +1,5 @@
+import { CHAT_ASSISTANT } from "./chat-persona.mjs";
+
 // Chat has its own storage namespace; it never changes trading settings or history.
 export const STORAGE_KEY = "aurum-chat-workspace-v1";
 export const IMAGE_KEY = "aurum-chat-image-v1";
@@ -251,5 +253,5 @@ export function formatMessage(text) {
 
 export function exportConversation(chat) {
   const date = new Date(chat.createdAt).toLocaleString();
-  return `# ${chat.title}\n\nAurum AI · ${date}\n\n${chat.messages.map((message) => `## ${message.role === "user" ? "You" : "Aurum AI"}\n\n${message.content}`).join("\n\n---\n\n")}\n\n---\nAI can make mistakes. Think critically. Trade responsibly.\n`;
+  return `# ${chat.title}\n\n${CHAT_ASSISTANT.name} · Aurum Quant AI · ${date}\n\n${chat.messages.map((message) => `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.content}`).join("\n\n---\n\n")}\n\n---\nAI can make mistakes. Think critically. Trade responsibly.\n`;
 }

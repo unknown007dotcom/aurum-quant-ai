@@ -10,9 +10,9 @@
     <meta name="color-scheme" content="light" />
     <meta
       name="description"
-      content="A little curiosity. A new perspective. Chat with Aurum AI in your own focused workspace."
+      content="A little curiosity. A new perspective. Chat with Mira, your AI assistant, in your own focused workspace."
     />
-    <title>Chat Mode · Aurum Quant AI</title>
+    <title>Mira · Chat Mode · Aurum Quant AI</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link
       rel="preload"
@@ -21,8 +21,8 @@
       type="font/woff2"
       crossorigin
     />
-    <link rel="stylesheet" href="./chat.css?v=3" />
-    <script type="module" src="./chat.js?v=2"></script>
+    <link rel="stylesheet" href="./chat.css?v=4" />
+    <script type="module" src="./chat.js?v=3"></script>
   </head>
   <body>
     <a class="skip-link" href="#messageInput">Skip to chat</a>
@@ -192,13 +192,16 @@
                 <use href="./assets/chat-icons.svg#panel" />
               </svg>
             </button>
-            <div class="assistant-avatar">
-              <svg class="icon" aria-hidden="true">
-                <use href="./assets/chat-icons.svg#sparkles" />
-              </svg>
+            <div class="assistant-avatar has-portrait">
+              <img
+                src="./assets/mira-avatar.webp"
+                width="37"
+                height="37"
+                alt=""
+              />
             </div>
             <div class="conversation-heading">
-              <h1>Aurum AI<span class="assistant-label">ASSISTANT</span></h1>
+              <h1>Mira<span class="assistant-label">AI ASSISTANT</span></h1>
               <p id="conversationTitle">A little insight. A new perspective.</p>
             </div>
             <div class="conversation-actions">
@@ -357,19 +360,19 @@
               </button>
             </div>
             <form class="composer" id="composerForm">
-              <label class="sr-only" for="messageInput">Message Aurum AI</label>
+              <label class="sr-only" for="messageInput">Message Mira</label>
               <textarea
                 id="messageInput"
                 rows="2"
                 maxlength="8000"
-                placeholder="What's on your mind? Ask Aurum anything…"
+                placeholder="What's on your mind? Ask Mira anything…"
                 autocomplete="off"
               ></textarea>
               <div class="composer-toolbar">
                 <span class="composer-model"
                   ><svg class="icon" aria-hidden="true">
                     <use href="./assets/chat-icons.svg#sparkles" /></svg
-                  >Aurum AI<span class="composer-model-divider"></span
+                  >Mira<span class="composer-model-divider"></span
                   ><span id="selectedModelCaption">Default model</span></span
                 ><span
                   id="characterCount"
@@ -428,11 +431,21 @@
             >
           </div>
           <div class="settings-scroll">
-            <section class="personal-space" aria-label="Custom chat image">
-              <div class="image-preview" id="imagePreview">
-                <img id="customImage" alt="Your custom chat artwork" hidden />
-                <span class="image-corner-label">YOUR SPACE</span>
-                <div class="image-placeholder" id="imagePlaceholder">
+            <section class="personal-space" aria-label="Assistant portrait">
+              <div class="image-preview has-image is-default" id="imagePreview">
+                <img
+                  id="customImage"
+                  src="./assets/mira-assistant.webp"
+                  width="960"
+                  height="720"
+                  alt="Anime portrait of Mira, your AI assistant"
+                  decoding="async"
+                  fetchpriority="high"
+                />
+                <span class="image-corner-label" id="imageCornerLabel"
+                  >MEET MIRA</span
+                >
+                <div class="image-placeholder" id="imagePlaceholder" hidden>
                   <div class="placeholder-frame">
                     <svg class="icon" aria-hidden="true">
                       <use href="./assets/chat-icons.svg#image" /></svg
@@ -440,8 +453,8 @@
                       <use href="./assets/chat-icons.svg#sparkles" />
                     </svg>
                   </div>
-                  <strong>A little more you.</strong>
-                  <p>A space for your custom image.</p>
+                  <strong>Mira</strong>
+                  <p>Your AI assistant. Your space.</p>
                   <button
                     class="add-image-button"
                     id="uploadImageButton"
@@ -452,13 +465,13 @@
                     >Add an image
                   </button>
                 </div>
-                <div class="image-actions" id="imageActions" hidden>
+                <div class="image-actions" id="imageActions">
                   <button
                     class="icon-button"
                     id="changeImageButton"
                     type="button"
-                    aria-label="Change image"
-                    title="Change image"
+                    aria-label="Change assistant portrait"
+                    title="Upload your own image"
                   >
                     <svg class="icon" aria-hidden="true">
                       <use href="./assets/chat-icons.svg#image" />
@@ -467,11 +480,12 @@
                     class="icon-button"
                     id="removeImageButton"
                     type="button"
-                    aria-label="Remove custom image"
-                    title="Remove image"
+                    aria-label="Restore Mira's portrait"
+                    title="Restore Mira's portrait"
+                    hidden
                   >
                     <svg class="icon" aria-hidden="true">
-                      <use href="./assets/chat-icons.svg#trash" />
+                      <use href="./assets/chat-icons.svg#refresh" />
                     </svg>
                   </button>
                 </div>
@@ -484,19 +498,22 @@
                   aria-label="Upload a custom image"
                 />
               </div>
-              <p class="image-caption">
-                Your image. Your inspiration. Your space.
+              <p class="image-caption" id="imageCaption">
+                Mira · Your AI assistant
               </p>
             </section>
             <div class="assistant-profile">
-              <div class="assistant-avatar small">
-                <svg class="icon" aria-hidden="true">
-                  <use href="./assets/chat-icons.svg#sparkles" />
-                </svg>
+              <div class="assistant-avatar small has-portrait">
+                <img
+                  src="./assets/mira-avatar.webp"
+                  width="31"
+                  height="31"
+                  alt=""
+                />
               </div>
               <div>
-                <h3>Aurum AI</h3>
-                <p>Curiosity meets clarity.</p>
+                <h3>Mira</h3>
+                <p>Your Aurum Quant AI assistant.</p>
               </div>
               <svg class="icon profile-sparkle" aria-hidden="true">
                 <use href="./assets/chat-icons.svg#sparkles" />

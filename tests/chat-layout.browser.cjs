@@ -13,6 +13,8 @@ const MIME = {
   ".mjs": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webp": "image/webp",
   ".woff2": "font/woff2",
 };
 const server = http.createServer(async (req, res) => {
@@ -26,6 +28,7 @@ const server = http.createServer(async (req, res) => {
         "chat.js",
         "favicon.svg",
         "modules/chat-store.mjs",
+        "modules/chat-persona.mjs",
       ].some((name) => file === path.join(ROOT, name)) ||
       file.startsWith(path.join(ROOT, "assets") + path.sep);
     if (!allowed) {
@@ -95,10 +98,11 @@ async function run() {
       ];
     }
     browser = await chromium.launch(options);
-    const page = await browser.newPage({
+    const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       reducedMotion: "reduce",
     });
+    const page = await context.newPage();
     const pageErrors = [];
     const posts = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -121,6 +125,41 @@ async function run() {
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/chat.html`);
     await page.locator('#providerStatus[data-state="configured"]').waitFor();
+
+    const assertMiraPortrait = async () => {
+      await page.waitForFunction(() => {
+        const image = document.getElementById("customImage");
+        return (
+          image.dataset.artwork === "default" &&
+          image.complete &&
+          image.naturalWidth > 0 &&
+          image.src.endsWith("/assets/mira-assistant.webp")
+        );
+      });
+      assert.equal(await page.locator("#customImage").isVisible(), true);
+      assert.equal(await page.locator("#imagePlaceholder").isVisible(), false);
+      assert.equal(await page.locator("#removeImageButton").isVisible(), false);
+      assert.match(
+        await page.locator("#customImage").getAttribute("alt"),
+        /Mira.*AI assistant/,
+      );
+    };
+    await assertMiraPortrait();
+    assert.match(
+      await page.locator(".conversation-heading h1").innerText(),
+      /Mira/,
+    );
+    assert.equal(
+      await page.locator(".assistant-profile h3").innerText(),
+      "Mira",
+    );
+    assert.match(
+      await page.locator('label[for="messageInput"]').innerText(),
+      /Mira/,
+    );
+    console.log(
+      "PASS: Mira's portrait and assistant identity load by default.",
+    );
 
     for (const width of [
       1920, 1440, 1366, 1280, 1181, 1180, 1100, 1024, 1000, 960, 900, 899, 820,
@@ -206,6 +245,78 @@ async function run() {
     );
     console.log(
       "PASS: Docked controls work, affect requests, and survive reload.",
+    );
+
+    assert.equal(
+      await page.locator(".message.assistant .message-meta strong").innerText(),
+      "Mira",
+    );
+    const upload = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 80;
+      canvas.height = 80;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#e6c587";
+      ctx.fillRect(0, 0, 80, 80);
+      return canvas.toDataURL("image/png").split(",")[1];
+    });
+    await page.locator("#imageInput").setInputFiles({
+      name: "custom.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(upload, "base64"),
+    });
+    await page.waitForFunction(
+      () =>
+        document.getElementById("customImage").dataset.artwork === "custom" &&
+        Boolean(localStorage.getItem("aurum-chat-image-v1")),
+    );
+    assert.equal(await page.locator("#removeImageButton").isVisible(), true);
+    await page.reload();
+    await page.waitForFunction(
+      () =>
+        document.getElementById("customImage").dataset.artwork === "custom" &&
+        document.getElementById("customImage").naturalWidth > 0,
+    );
+    await page.locator("#removeImageButton").click();
+    await assertMiraPortrait();
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem("aurum-chat-image-v1")),
+      null,
+    );
+    await page.reload();
+    await assertMiraPortrait();
+    await page.evaluate(() =>
+      localStorage.setItem("aurum-chat-image-v1", "data:image/png;base64,AAAA"),
+    );
+    await page.reload();
+    await assertMiraPortrait();
+    await page.evaluate(() => localStorage.removeItem("aurum-chat-image-v1"));
+    console.log(
+      "PASS: Custom uploads persist, Restore Mira works, and broken images fall back safely.",
+    );
+
+    // A missing bundled portrait should reveal a usable fallback, not loop requests.
+    const fallbackPage = await page.context().newPage();
+    let portraitRequests = 0;
+    await fallbackPage.route("**/api/chat", (route) =>
+      route.fulfill({ json: { models: [], configured: false } }),
+    );
+    await fallbackPage.route("**/assets/mira-assistant.webp", (route) => {
+      portraitRequests++;
+      return route.fulfill({ status: 404, body: "Not found" });
+    });
+    await fallbackPage.goto(
+      `http://127.0.0.1:${server.address().port}/chat.html`,
+    );
+    await fallbackPage.locator("#imagePlaceholder").waitFor();
+    assert.equal(
+      await fallbackPage.locator("#uploadImageButton").isVisible(),
+      true,
+    );
+    assert.equal(portraitRequests, 1);
+    await fallbackPage.close();
+    console.log(
+      "PASS: Missing portrait has a usable fallback without repeated requests.",
     );
 
     for (const width of [640, 600, 520, 430, 390, 360, 320]) {

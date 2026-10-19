@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import {
+  CHAT_ASSISTANT,
+  resolveChatArtwork,
+} from "../modules/chat-persona.mjs";
+import {
   createChat,
   restoreState,
   normalizeSettings,
@@ -191,7 +195,7 @@ test("exports include the full conversation, not settings or secrets", () => {
   const output = exportConversation(chat);
   assert.match(output, /^# Test export/);
   assert.match(output, /## You\n\nQuestion/);
-  assert.match(output, /## Aurum AI\n\nAnswer/);
+  assert.match(output, /## Mira\n\nAnswer/);
   assert.ok(!output.includes("temperature"));
 });
 
@@ -268,6 +272,11 @@ test("provider requests retain context, zero temperature, and chosen response st
   assert.equal(captured.body.max_tokens, 800);
   assert.equal(captured.body.stream, false);
   assert.deepEqual(captured.body.messages.slice(1), messages);
+  assert.match(
+    captured.body.messages[0].content,
+    /You are Mira, .*AI assistant/,
+  );
+  assert.match(captured.body.messages[0].content, /not a human/);
   assert.match(captured.body.messages[0].content, /Be concise/);
   assert.match(captured.body.messages[0].content, /never guarantee returns/);
   assert.equal(
@@ -512,4 +521,40 @@ test("Chat Mode explicitly uses light page and native-control themes", () => {
   assert.match(html, /<meta name="theme-color" content="#ffffff"/);
   assert.match(css, /:root\s*\{\s*color-scheme:\s*light;/);
   assert.doesNotMatch(css, /color-scheme:\s*dark/);
+});
+
+test("Mira has a bundled default portrait and consistent assistant identity", () => {
+  assert.equal(CHAT_ASSISTANT.name, "Mira");
+  const artwork = resolveChatArtwork(null);
+  assert.equal(artwork.src, CHAT_ASSISTANT.portrait);
+  assert.equal(artwork.isCustom, false);
+  assert.match(artwork.alt, /Mira.*AI assistant/);
+  for (const file of [CHAT_ASSISTANT.portrait, CHAT_ASSISTANT.avatar]) {
+    const image = readFileSync(new URL(`../${file}`, import.meta.url));
+    assert.equal(image.toString("ascii", 0, 4), "RIFF");
+    assert.equal(image.toString("ascii", 8, 12), "WEBP");
+  }
+});
+
+test("unsafe or invalid stored artwork falls back to Mira's portrait", () => {
+  for (const value of [
+    undefined,
+    "",
+    {},
+    5,
+    "https://example.com/tracker.png",
+    "javascript:alert(1)",
+    "data:image/svg+xml;base64,PHN2Zz4=",
+    "data:image/png;base64,??",
+    "data:image/png;base64," + "A".repeat(2 * 1024 * 1024),
+  ]) {
+    assert.equal(resolveChatArtwork(value).src, CHAT_ASSISTANT.portrait);
+    assert.equal(resolveChatArtwork(value).isCustom, false);
+  }
+  const localImage = "data:image/webp;base64,UklGRg==";
+  assert.deepEqual(resolveChatArtwork(localImage), {
+    src: localImage,
+    alt: "Your custom chat artwork",
+    isCustom: true,
+  });
 });

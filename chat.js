@@ -14,7 +14,8 @@ import {
   historyGroup,
   formatMessage,
   exportConversation,
-} from "./modules/chat-store.mjs";
+} from "./modules/chat-store.mjs?v=2";
+import { CHAT_ASSISTANT, resolveChatArtwork } from "./modules/chat-persona.mjs";
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) =>
@@ -156,12 +157,23 @@ function messageNode(message, index) {
   const article = element("article", `message ${message.role}`);
   const avatar = element("div", "message-avatar");
   avatar.setAttribute("aria-hidden", "true");
-  if (message.role === "assistant") avatar.innerHTML = icon("sparkles");
-  else avatar.textContent = "Y";
+  if (message.role === "assistant") {
+    avatar.classList.add("has-portrait");
+    const portrait = element("img", "");
+    portrait.src = CHAT_ASSISTANT.avatar;
+    portrait.alt = "";
+    portrait.width = 30;
+    portrait.height = 30;
+    avatar.append(portrait);
+  } else avatar.textContent = "Y";
   const main = element("div", "message-main");
   const meta = element("div", "message-meta");
   meta.append(
-    element("strong", "", message.role === "user" ? "You" : "Aurum AI"),
+    element(
+      "strong",
+      "",
+      message.role === "user" ? "You" : CHAT_ASSISTANT.name,
+    ),
   );
   if (message.createdAt) {
     const time = element(
@@ -210,8 +222,8 @@ function renderConversation({ scroll = true } = {}) {
     ? current.title
     : "A little insight. A new perspective.";
   document.title = hasMessages
-    ? `${current.title} · Aurum AI`
-    : "Chat Mode · Aurum Quant AI";
+    ? `${current.title} · ${CHAT_ASSISTANT.name}`
+    : `${CHAT_ASSISTANT.name} · Chat Mode · Aurum Quant AI`;
   const container = $("messages");
   container.setAttribute("aria-busy", "true");
   container.replaceChildren();
@@ -228,7 +240,7 @@ function renderConversation({ scroll = true } = {}) {
   );
   if (pending?.chatId === current.id) {
     const typing = element("div", "message assistant");
-    typing.innerHTML = `<div class="message-avatar" aria-hidden="true">${icon("sparkles")}</div><div class="message-main"><div class="message-meta"><strong>Aurum AI</strong></div><div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span><div class="typing-label">Thinking it through…</div></div><span class="sr-only">Aurum is preparing a response.</span></div>`;
+    typing.innerHTML = `<div class="message-avatar has-portrait" aria-hidden="true"><img src="${CHAT_ASSISTANT.avatar}" width="30" height="30" alt="" /></div><div class="message-main"><div class="message-meta"><strong>${CHAT_ASSISTANT.name}</strong></div><div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span><div class="typing-label">Thinking it through…</div></div><span class="sr-only">${CHAT_ASSISTANT.name} is preparing a response.</span></div>`;
     container.append(typing);
   }
   container.setAttribute("aria-busy", "false");
@@ -308,8 +320,8 @@ function updateComposer() {
   $("sendButton").title = waiting ? "Stop response" : "Send message";
   $("messageInput").readOnly = waiting;
   $("messageInput").placeholder = waiting
-    ? "Aurum is thinking it through…"
-    : "What's on your mind? Ask Aurum anything…";
+    ? `${CHAT_ASSISTANT.name} is thinking it through…`
+    : `What's on your mind? Ask ${CHAT_ASSISTANT.name} anything…`;
   $("characterCount").hidden = $("messageInput").value.length < 7200;
   $("characterCount").textContent =
     `${$("messageInput").value.length.toLocaleString()} / 8,000`;
@@ -606,14 +618,24 @@ function setProviderStatus(status, text) {
   );
 }
 
-function showImage(data) {
-  const hasImage = Boolean(data);
-  if (data) $("customImage").src = data;
-  else $("customImage").removeAttribute("src");
-  $("customImage").hidden = !hasImage;
-  $("imagePlaceholder").hidden = hasImage;
-  $("imageActions").hidden = !hasImage;
-  $("imagePreview").classList.toggle("has-image", hasImage);
+function showImage(value) {
+  const artwork = resolveChatArtwork(value);
+  const image = $("customImage");
+  image.dataset.artwork = artwork.isCustom ? "custom" : "default";
+  image.alt = artwork.alt;
+  image.hidden = false;
+  if (image.getAttribute("src") !== artwork.src) image.src = artwork.src;
+  $("imagePlaceholder").hidden = true;
+  $("imageActions").hidden = false;
+  $("removeImageButton").hidden = !artwork.isCustom;
+  $("imagePreview").classList.add("has-image");
+  $("imagePreview").classList.toggle("is-default", !artwork.isCustom);
+  $("imageCornerLabel").textContent = artwork.isCustom
+    ? "YOUR SPACE"
+    : `MEET ${CHAT_ASSISTANT.name.toUpperCase()}`;
+  $("imageCaption").textContent = artwork.isCustom
+    ? "Your image. Your inspiration. Your space."
+    : `${CHAT_ASSISTANT.name} · Your AI assistant`;
 }
 
 async function uploadImage(event) {
@@ -836,14 +858,27 @@ $("removeImageButton").addEventListener("click", () => {
   showImage("");
   try {
     localStorage.removeItem(IMAGE_KEY);
-    toast("Custom image removed.");
+    toast(`${CHAT_ASSISTANT.name}’s portrait restored.`);
   } catch {
-    toast("Image removed for this visit; browser storage is unavailable.");
+    toast(
+      `${CHAT_ASSISTANT.name}’s portrait restored for this visit; browser storage is unavailable.`,
+    );
   }
 });
 $("customImage").addEventListener("error", () => {
-  showImage("");
-  toast("The saved image couldn't be loaded. Please upload it again.");
+  if ($("customImage").dataset.artwork === "custom") {
+    showImage("");
+    toast(
+      `Your saved image couldn't load. Showing ${CHAT_ASSISTANT.name}’s portrait instead.`,
+    );
+    return;
+  }
+  // Do not repeatedly request an unavailable default image.
+  $("customImage").hidden = true;
+  $("customImage").removeAttribute("src");
+  $("imagePlaceholder").hidden = false;
+  $("imageActions").hidden = true;
+  $("imagePreview").classList.remove("has-image");
 });
 $("historyToggle").addEventListener("click", () =>
   openDrawer($("historyPanel"), $("historyToggle")),
@@ -874,15 +909,13 @@ document.addEventListener("click", (event) => {
 window.addEventListener("pagehide", persist);
 
 try {
-  const image = localStorage.getItem(IMAGE_KEY);
-  if (
-    image &&
-    image.length < 2 * 1024 * 1024 &&
-    /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(image)
-  )
-    showImage(image);
+  showImage(localStorage.getItem(IMAGE_KEY));
 } catch {
-  /* The image is optional; the workspace still works without storage. */
+  showImage("");
+}
+// The initial HTML image may have failed before the module attached its listener.
+if ($("customImage").complete && !$("customImage").naturalWidth) {
+  $("customImage").dispatchEvent(new Event("error"));
 }
 $("messageInput").value = current.draft || "";
 $("searchShortcut").textContent = /Mac|iPhone|iPad/.test(navigator.platform)

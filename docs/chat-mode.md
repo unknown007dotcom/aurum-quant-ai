@@ -13,7 +13,7 @@ The page is a standalone, light-and-gold, three-column chat workspace inspired b
 
 ## Image area
 
-No image has been generated: the panel intentionally reserves space for the user's later image description. Optional uploads support PNG, JPEG, and WebP up to 5 MB. Images are resized to at most 1,000 pixels on their longest edge, converted to WebP, and saved in browser storage. The image is decorative and is **not** attached to messages or sent to the AI provider.
+The assistant is named **Mira**, with a user-selected, AI-generated anime portrait shown by default in the right panel and matching small avatars in the conversation. Her name is used consistently in chat labels, exports, and the server-controlled AI prompt; she remains clearly identified as an AI assistant. Optional uploads support PNG, JPEG, and WebP up to 5 MB. Images are resized to at most 1,000 pixels on their longest edge, converted to WebP, and saved in browser storage. The image is decorative and is **not** attached to messages or sent to the AI provider. Uploading an image overrides the portrait only in this browser; **Restore Mira's portrait** returns to the bundled default. Invalid or unreadable saved images fall back to Mira.
 
 Fonts and icons are served locally; the chat interface does not need a third-party asset CDN. Font licenses are in `assets/fonts/`.
 

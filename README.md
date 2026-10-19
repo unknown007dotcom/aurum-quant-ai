@@ -35,8 +35,8 @@ The dedicated workspace has searchable, browser-local conversations on the left,
 a central chat composer, and model/response settings plus a custom image area on
 the right. On smaller screens the sidebars become keyboard-accessible drawers.
 
-The image area is intentionally a placeholder until custom artwork is supplied.
-You can also upload a PNG, JPEG, or WebP; it stays in this browser and is not sent
+Your assistant **Mira** has a default anime portrait in the right panel.
+You can also upload a PNG, JPEG, or WebP and restore Mira's portrait at any time; it stays in this browser and is not sent
 to the AI. Chat requests use the existing NVIDIA configuration through the
 same-origin `/api/chat` endpoint, independently of trade execution.
 
