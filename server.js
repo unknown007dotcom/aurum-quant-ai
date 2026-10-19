@@ -69,6 +69,11 @@ const API_ROOT = path.join(ROOT, "api-handlers");
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".ico": "image/x-icon",
@@ -104,7 +109,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Aurum Quant AI running at http://localhost:${PORT}`);
 });
 
@@ -112,6 +117,27 @@ const CLOUDFLARE_BACKEND = process.env.CLOUDFLARE_WORKER_URL || "https://aurum-q
 
 async function serveApiRoute(nodeReq, nodeRes, requestUrl) {
   const relativeRoute = requestUrl.pathname.replace(/^\/api\//, "");
+  // Chat has a same-origin adapter for both the edge and local configurations.
+  if (relativeRoute === "chat") {
+    nodeReq.query = Object.fromEntries(requestUrl.searchParams.entries());
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of nodeReq) {
+      bytes += chunk.length;
+      if (bytes > 512 * 1024) return sendJson(nodeRes, 413, { message: "Chat request is too large." });
+      chunks.push(chunk);
+    }
+    try {
+      const text = Buffer.concat(chunks).toString("utf8");
+      nodeReq.body = text ? JSON.parse(text) : {};
+    } catch {
+      return sendJson(nodeRes, 400, { message: "Send a valid JSON chat request." });
+    }
+    const responseAdapter = createResponseAdapter(nodeRes);
+    await require("./api-handlers/chat")(nodeReq, responseAdapter);
+    if (!responseAdapter.finished) responseAdapter.end();
+    return;
+  }
   const targetUrl = `${CLOUDFLARE_BACKEND}/${relativeRoute}${requestUrl.search}`;
 
   try {

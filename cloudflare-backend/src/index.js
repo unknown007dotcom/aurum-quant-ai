@@ -1,4 +1,5 @@
 import { AnalysisEngine } from "../../modules/analysis-engine.js";
+import { chatConfiguration, completeChat, ChatError } from "../../lib/chat-service.mjs";
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_INSTRUMENT = "XAU_USD";
 const HISTORY_LIMIT = 150;
@@ -223,6 +224,9 @@ export default {
       if (url.pathname === "/history-log") {
         return jsonResponse(await handleHistoryLog(request, env), request);
       }
+      if (url.pathname === "/chat") {
+        return handleChatResponse(request, env);
+      }
       if (url.pathname === "/ai-decision" && request.method === "POST") {
         return jsonResponse(await handleAiDecision(request, env), request);
       }
@@ -256,6 +260,25 @@ export default {
     ctx.waitUntil(runBotTick(env, { source: "cron", executeTrades: true }).catch(console.error));
   }
 };
+
+async function handleChatResponse(request, env) {
+  if (!["GET", "POST"].includes(request.method)) {
+    return jsonResponse({ message: "Method not allowed." }, request, 405);
+  }
+  try {
+    const settings = await loadSettings(env);
+    if (request.method === "GET") return jsonResponse(chatConfiguration(settings, env), request);
+    const text = await request.text();
+    if (text.length > 512 * 1024) throw new ChatError("Chat request is too large.", 413);
+    let body;
+    try { body = JSON.parse(text); } catch { throw new ChatError("Send a valid JSON chat request."); }
+    return jsonResponse(await completeChat(body, settings, env), request);
+  } catch (error) {
+    return jsonResponse({
+      message: error instanceof ChatError ? error.message : "Chat is temporarily unavailable. Please try again.",
+    }, request, error instanceof ChatError ? error.status : 500);
+  }
+}
 
 async function handleMarketMtfResponse(url, env, request) {
   const symbol = normalizeInstrument(url.searchParams.get("symbol") || DEFAULT_INSTRUMENT);

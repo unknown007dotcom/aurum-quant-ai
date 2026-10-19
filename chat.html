@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="A little curiosity. A new perspective. Chat with Aurum AI in your own focused workspace."
+    />
+    <title>Chat Mode · Aurum Quant AI</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link
+      rel="preload"
+      href="./assets/fonts/inter-latin-variable.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="./chat.css?v=2" />
+    <script type="module" src="./chat.js?v=1"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#messageInput">Skip to chat</a>
+    <div class="chat-app" id="chatApp">
+      <header class="workspace-header">
+        <a
+          class="brand"
+          href="./index.html"
+          aria-label="Aurum Quant AI terminal"
+        >
+          <img src="./assets/chat-logo.svg" width="36" height="36" alt="" />
+          <span>AURUM<span class="brand-subtitle">QUANT AI</span></span>
+        </a>
+        <nav class="workspace-nav" aria-label="Workspace modes">
+          <a href="./index.html" aria-label="Terminal"
+            ><svg class="icon" aria-hidden="true">
+              <use href="./assets/chat-icons.svg#terminal" /></svg
+            ><span>Terminal</span></a
+          >
+          <a href="./chat.html" class="active" aria-current="page"
+            ><svg class="icon" aria-hidden="true">
+              <use href="./assets/chat-icons.svg#chat" /></svg
+            ><span>Chat Mode</span><span class="new-badge">NEW</span></a
+          >
+        </nav>
+        <div class="workspace-meta">
+          <span class="workspace-tagline">A space for your next big idea.</span
+          ><span
+            class="workspace-avatar"
+            title="Your local workspace"
+            aria-label="Your local workspace"
+            >Y<span></span
+          ></span>
+        </div>
+      </header>
+
+      <div class="workspace-body">
+        <aside
+          class="history-panel side-panel"
+          id="historyPanel"
+          aria-labelledby="historyTitle"
+          tabindex="-1"
+        >
+          <div class="sidebar-heading">
+            <h2 id="historyTitle">Your workspace</h2>
+            <button
+              class="icon-button drawer-close history-mobile-toggle"
+              type="button"
+              data-close-drawer
+              aria-label="Close history"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#close" />
+              </svg></button
+            ><span class="workspace-indicator" aria-hidden="true"></span>
+          </div>
+          <button class="new-chat-button" id="newChatButton" type="button">
+            <svg class="icon" aria-hidden="true">
+              <use href="./assets/chat-icons.svg#plus" /></svg
+            >New conversation<kbd>Alt N</kbd>
+          </button>
+          <div class="history-search">
+            <svg class="icon" aria-hidden="true">
+              <use href="./assets/chat-icons.svg#search" /></svg
+            ><label class="sr-only" for="searchChats"
+              >Search conversations</label
+            ><input
+              id="searchChats"
+              type="search"
+              placeholder="Search chats"
+              autocomplete="off"
+            /><kbd id="searchShortcut">⌘ K</kbd>
+          </div>
+          <div class="history-scroll">
+            <div class="section-label history-label">
+              <span>CONVERSATIONS</span
+              ><span id="chatCount" class="count-badge">0</span>
+            </div>
+            <div id="historyList" class="history-list"></div>
+            <p id="historyEmpty" class="history-empty">
+              A fresh start. Your chats will live here.
+            </p>
+            <div class="example-section">
+              <div class="section-label">
+                <span>A LITTLE INSPIRATION</span
+                ><span class="example-label">EXAMPLES</span>
+              </div>
+              <div id="exampleList" class="history-list">
+                <button
+                  class="history-item example-item"
+                  data-example="market"
+                  type="button"
+                >
+                  <svg class="icon" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#chat" /></svg
+                  ><span
+                    >Understanding market structure<small
+                      >Start with the bigger picture</small
+                    ></span
+                  >
+                </button>
+                <button
+                  class="history-item example-item"
+                  data-example="routine"
+                  type="button"
+                >
+                  <svg class="icon" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#chat" /></svg
+                  ><span
+                    >A more mindful trading routine<small
+                      >Small habits, clearer decisions</small
+                    ></span
+                  >
+                </button>
+                <button
+                  class="history-item example-item"
+                  data-example="ideas"
+                  type="button"
+                >
+                  <svg class="icon" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#chat" /></svg
+                  ><span
+                    >Finding a fresh perspective<small
+                      >Make room for a new idea</small
+                    ></span
+                  >
+                </button>
+              </div>
+            </div>
+            <p id="searchEmpty" class="history-empty" hidden>
+              No conversations found. Try another search.
+            </p>
+          </div>
+          <div class="sidebar-footer">
+            <div class="local-note">
+              <svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#lock" />
+              </svg>
+              <div>
+                <strong>Just your space.</strong
+                ><span>History is saved in this browser.</span>
+              </div>
+            </div>
+            <a class="back-to-terminal" href="./index.html"
+              ><svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#arrow-left" /></svg
+              >Back to terminal<svg
+                class="icon terminal-icon"
+                aria-hidden="true"
+              >
+                <use href="./assets/chat-icons.svg#terminal" /></svg
+            ></a>
+          </div>
+        </aside>
+
+        <main class="conversation" id="conversationMain">
+          <header class="conversation-header">
+            <button
+              class="icon-button history-mobile-toggle"
+              id="historyToggle"
+              type="button"
+              aria-label="Open chat history"
+              aria-expanded="false"
+              aria-controls="historyPanel"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#panel" />
+              </svg>
+            </button>
+            <div class="assistant-avatar">
+              <svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#sparkles" />
+              </svg>
+            </div>
+            <div class="conversation-heading">
+              <h1>Aurum AI<span class="assistant-label">ASSISTANT</span></h1>
+              <p id="conversationTitle">A little insight. A new perspective.</p>
+            </div>
+            <div class="conversation-actions">
+              <button
+                class="icon-button settings-mobile-toggle"
+                id="chatSettingsToggle"
+                type="button"
+                aria-label="Open chat settings"
+                aria-expanded="false"
+                aria-controls="chatSettingsPanel"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="./assets/chat-icons.svg#sliders" />
+                </svg>
+              </button>
+              <details class="conversation-menu" id="conversationMenu">
+                <summary
+                  class="icon-button"
+                  aria-label="Conversation actions"
+                  title="Conversation actions"
+                >
+                  <span aria-hidden="true">···</span>
+                </summary>
+                <div class="action-menu">
+                  <button id="renameChatButton" type="button" disabled>
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#edit" /></svg
+                    >Rename chat
+                  </button>
+                  <button id="exportChatButton" type="button" disabled>
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#download" /></svg
+                    >Export conversation
+                  </button>
+                  <button
+                    id="deleteChatButton"
+                    class="danger-text"
+                    type="button"
+                    disabled
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#trash" /></svg
+                    >Delete chat
+                  </button>
+                </div>
+              </details>
+            </div>
+          </header>
+
+          <div class="chat-scroll" id="messageScroll">
+            <section
+              class="welcome"
+              id="welcomeScreen"
+              aria-labelledby="welcomeTitle"
+            >
+              <div class="welcome-emblem" aria-hidden="true">
+                <div class="emblem-orbit"></div>
+                <div class="emblem-core">
+                  <svg><use href="./assets/chat-icons.svg#sparkles" /></svg>
+                </div>
+                <svg class="icon emblem-star" aria-hidden="true">
+                  <use href="./assets/chat-icons.svg#sparkles" /></svg
+                ><span class="emblem-dot"></span>
+              </div>
+              <p class="welcome-eyebrow">GOOD QUESTIONS. NEW POSSIBILITIES.</p>
+              <h2 id="welcomeTitle">
+                Great ideas start with<br /><span>a conversation.</span>
+              </h2>
+              <p class="welcome-description">
+                Make sense of the markets. Explore a new idea.<br />Your next
+                perspective is just a message away.
+              </p>
+              <div class="prompt-grid" aria-label="Conversation starters">
+                <button
+                  class="prompt-card"
+                  type="button"
+                  data-prompt="Explain market structure and how to identify a change of character in XAUUSD. Use a simple hypothetical example, not live prices."
+                >
+                  <span class="prompt-icon sage"
+                    ><svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#chart" /></svg></span
+                  ><strong>Decode the market</strong
+                  ><span>See the bigger picture in the charts.</span
+                  ><svg class="icon prompt-arrow" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#arrow-right" />
+                  </svg>
+                </button>
+                <button
+                  class="prompt-card"
+                  type="button"
+                  data-prompt="Help me build a practical pre-trade checklist with a focus on risk management and avoiding impulsive decisions."
+                >
+                  <span class="prompt-icon gold"
+                    ><svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#shield" /></svg></span
+                  ><strong>Build a better strategy</strong
+                  ><span>Turn a good plan into a clear process.</span
+                  ><svg class="icon prompt-arrow" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#arrow-right" />
+                  </svg>
+                </button>
+                <button
+                  class="prompt-card"
+                  type="button"
+                  data-prompt="Teach me something interesting about how people make decisions under uncertainty. Start simple, then give me an example."
+                >
+                  <span class="prompt-icon lavender"
+                    ><svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#book" /></svg></span
+                  ><strong>Learn something new</strong
+                  ><span>Follow your curiosity a little further.</span
+                  ><svg class="icon prompt-arrow" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#arrow-right" />
+                  </svg>
+                </button>
+                <button
+                  class="prompt-card"
+                  type="button"
+                  data-prompt="I want to brainstorm a new idea. Ask me a few thoughtful questions to help me find a fresh perspective."
+                >
+                  <span class="prompt-icon clay"
+                    ><svg class="icon" aria-hidden="true">
+                      <use
+                        href="./assets/chat-icons.svg#lightbulb"
+                      /></svg></span
+                  ><strong>Think outside the chart</strong
+                  ><span>Find a fresh angle on your next idea.</span
+                  ><svg class="icon prompt-arrow" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#arrow-right" />
+                  </svg>
+                </button>
+              </div>
+              <p class="welcome-hint">
+                A starting point, not a limit. Ask anything.
+              </p>
+            </section>
+            <div
+              class="messages"
+              id="messages"
+              role="log"
+              aria-label="Conversation messages"
+              aria-live="polite"
+              aria-relevant="additions"
+              hidden
+            ></div>
+          </div>
+
+          <div class="composer-zone">
+            <div class="chat-error" id="chatError" role="alert" hidden>
+              <span id="chatErrorText"></span
+              ><button id="retryButton" type="button">
+                Try again<svg class="icon" aria-hidden="true">
+                  <use href="./assets/chat-icons.svg#refresh" />
+                </svg>
+              </button>
+            </div>
+            <form class="composer" id="composerForm">
+              <label class="sr-only" for="messageInput">Message Aurum AI</label>
+              <textarea
+                id="messageInput"
+                rows="2"
+                maxlength="8000"
+                placeholder="What's on your mind? Ask Aurum anything…"
+                autocomplete="off"
+              ></textarea>
+              <div class="composer-toolbar">
+                <span class="composer-model"
+                  ><svg class="icon" aria-hidden="true">
+                    <use href="./assets/chat-icons.svg#sparkles" /></svg
+                  >Aurum AI<span class="composer-model-divider"></span
+                  ><span id="selectedModelCaption">Default model</span></span
+                ><span
+                  id="characterCount"
+                  class="character-count"
+                  hidden
+                ></span>
+                <div class="send-controls">
+                  <span class="send-hint" id="sendHint">Enter to send</span
+                  ><button
+                    class="send-button"
+                    id="sendButton"
+                    type="submit"
+                    aria-label="Send message"
+                    title="Send message"
+                    disabled
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#arrow-up" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </form>
+            <p class="composer-disclaimer">
+              AI can make mistakes. Think critically. Trade responsibly.
+            </p>
+          </div>
+        </main>
+
+        <aside
+          class="chat-settings-panel side-panel"
+          id="chatSettingsPanel"
+          aria-labelledby="chatSettingsTitle"
+          tabindex="-1"
+        >
+          <div class="settings-heading">
+            <svg class="icon" aria-hidden="true">
+              <use href="./assets/chat-icons.svg#sliders" />
+            </svg>
+            <h2 id="chatSettingsTitle">Chat settings</h2>
+            <button
+              class="icon-button drawer-close settings-mobile-toggle"
+              type="button"
+              data-close-drawer
+              aria-label="Close chat settings"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#close" /></svg
+              ><span class="settings-heading-dot" aria-hidden="true"
+                >·</span
+              ></button
+            ><span
+              class="settings-heading-dot desktop-settings-dot"
+              aria-hidden="true"
+              >···</span
+            >
+          </div>
+          <div class="settings-scroll">
+            <section class="personal-space" aria-label="Custom chat image">
+              <div class="image-preview" id="imagePreview">
+                <img id="customImage" alt="Your custom chat artwork" hidden />
+                <span class="image-corner-label">YOUR SPACE</span>
+                <div class="image-placeholder" id="imagePlaceholder">
+                  <div class="placeholder-frame">
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#image" /></svg
+                    ><svg class="icon placeholder-sparkle" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#sparkles" />
+                    </svg>
+                  </div>
+                  <strong>A little more you.</strong>
+                  <p>A space for your custom image.</p>
+                  <button
+                    class="add-image-button"
+                    id="uploadImageButton"
+                    type="button"
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#plus" /></svg
+                    >Add an image
+                  </button>
+                </div>
+                <div class="image-actions" id="imageActions" hidden>
+                  <button
+                    class="icon-button"
+                    id="changeImageButton"
+                    type="button"
+                    aria-label="Change image"
+                    title="Change image"
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#image" />
+                    </svg></button
+                  ><button
+                    class="icon-button"
+                    id="removeImageButton"
+                    type="button"
+                    aria-label="Remove custom image"
+                    title="Remove image"
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#trash" />
+                    </svg>
+                  </button>
+                </div>
+                <input
+                  class="sr-only"
+                  id="imageInput"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  tabindex="-1"
+                  aria-label="Upload a custom image"
+                />
+              </div>
+              <p class="image-caption">
+                Your image. Your inspiration. Your space.
+              </p>
+            </section>
+            <div class="assistant-profile">
+              <div class="assistant-avatar small">
+                <svg class="icon" aria-hidden="true">
+                  <use href="./assets/chat-icons.svg#sparkles" />
+                </svg>
+              </div>
+              <div>
+                <h3>Aurum AI</h3>
+                <p>Curiosity meets clarity.</p>
+              </div>
+              <svg class="icon profile-sparkle" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#sparkles" />
+              </svg>
+            </div>
+            <div class="assistant-tags">
+              <span>Markets</span><span>Learning</span
+              ><span>Everyday ideas</span>
+            </div>
+            <div class="settings-divider"></div>
+            <label class="setting-label" for="chatModel"
+              >AI model<span class="subtle-label">NVIDIA</span></label
+            >
+            <div class="model-select-wrap">
+              <svg class="icon model-select-icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#sparkles" /></svg
+              ><select id="chatModel">
+                <option value="">Default model</option></select
+              ><svg class="icon model-chevron" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#chevron" />
+              </svg>
+            </div>
+            <p class="provider-status" id="providerStatus" role="status">
+              <span></span>Checking configuration…
+            </p>
+            <fieldset class="response-style">
+              <legend class="setting-label">Response style</legend>
+              <div class="segmented-control">
+                <label
+                  ><input
+                    type="radio"
+                    name="responseStyle"
+                    value="concise"
+                  /><span>Concise</span></label
+                ><label
+                  ><input
+                    type="radio"
+                    name="responseStyle"
+                    value="balanced"
+                    checked
+                  /><span>Balanced</span></label
+                ><label
+                  ><input
+                    type="radio"
+                    name="responseStyle"
+                    value="detailed"
+                  /><span>Detailed</span></label
+                >
+              </div>
+            </fieldset>
+            <div class="creativity-setting">
+              <label class="setting-label" for="creativity"
+                >Creativity<output for="creativity" id="creativityValue"
+                  >0.5</output
+                ></label
+              ><input
+                id="creativity"
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value="0.5"
+              />
+              <div class="range-labels">
+                <span>Precise</span><span>Imaginative</span>
+              </div>
+            </div>
+            <div class="settings-divider"></div>
+            <label class="toggle-setting" for="rememberContext"
+              ><span
+                ><strong>Conversation context</strong
+                ><small>Build on previous messages</small></span
+              ><input
+                type="checkbox"
+                role="switch"
+                id="rememberContext"
+                checked /><span class="toggle-track" aria-hidden="true"></span
+            ></label>
+            <label class="toggle-setting" for="enterToSend"
+              ><span
+                ><strong>Enter to send</strong
+                ><small>Shift + Enter for a new line</small></span
+              ><input
+                type="checkbox"
+                role="switch"
+                id="enterToSend"
+                checked /><span class="toggle-track" aria-hidden="true"></span
+            ></label>
+            <button
+              class="reset-settings"
+              id="resetSettingsButton"
+              type="button"
+            >
+              <svg class="icon" aria-hidden="true">
+                <use href="./assets/chat-icons.svg#refresh" /></svg
+              >Reset to defaults
+            </button>
+            <p class="settings-scope">Settings apply to this conversation.</p>
+          </div>
+          <div class="settings-footer">
+            <svg class="icon" aria-hidden="true">
+              <use href="./assets/chat-icons.svg#shield" />
+            </svg>
+            <p>
+              A conversation, not a trading signal.<br />Chat mode never
+              executes trades.
+            </p>
+          </div>
+        </aside>
+      </div>
+      <button
+        class="sidebar-backdrop"
+        id="sidebarBackdrop"
+        type="button"
+        tabindex="-1"
+        aria-label="Close sidebar"
+        hidden
+      ></button>
+    </div>
+
+    <dialog id="renameDialog" class="chat-dialog" aria-labelledby="renameTitle">
+      <form id="renameForm">
+        <div class="dialog-icon">
+          <svg class="icon" aria-hidden="true">
+            <use href="./assets/chat-icons.svg#edit" />
+          </svg>
+        </div>
+        <h2 id="renameTitle">A name for this conversation</h2>
+        <p>Make it easier to find your way back.</p>
+        <label class="sr-only" for="renameInput">Conversation name</label
+        ><input
+          id="renameInput"
+          type="text"
+          maxlength="80"
+          required
+          autocomplete="off"
+        />
+        <div class="dialog-actions">
+          <button type="button" class="quiet-button" id="cancelRenameButton">
+            Cancel</button
+          ><button type="submit" class="gold-button">Save name</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="deleteDialog" class="chat-dialog" aria-labelledby="deleteTitle">
+      <form method="dialog">
+        <div class="dialog-icon danger-text">
+          <svg class="icon" aria-hidden="true">
+            <use href="./assets/chat-icons.svg#trash" />
+          </svg>
+        </div>
+        <h2 id="deleteTitle">Delete this conversation?</h2>
+        <p id="deleteDescription">
+          This removes the chat from this browser. This cannot be undone.
+        </p>
+        <div class="dialog-actions">
+          <button type="submit" class="quiet-button" value="cancel" autofocus>
+            Keep chat</button
+          ><button type="submit" class="danger-button" value="delete">
+            Delete chat
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <noscript
+      ><div class="noscript-notice">
+        Please enable JavaScript to use Chat Mode.
+        <a href="./index.html">Return to terminal</a>
+      </div></noscript
+    >
+  </body>
+</html>

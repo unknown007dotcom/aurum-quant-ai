@@ -169,6 +169,34 @@ body::before {
 .hero-actions {
   display: flex;
   align-items: flex-start;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hero-actions .chat-mode-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 17px;
+  border: 1px solid rgba(240, 195, 106, 0.3);
+  border-radius: 999px;
+  color: var(--accent);
+  font: 500 13px "Space Grotesk", sans-serif;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 180ms ease, transform 180ms ease;
+}
+
+.chat-mode-button:hover {
+  background: rgba(240, 195, 106, 0.13);
+  transform: translateY(-1px);
+}
+
+.chat-mode-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 
 .eyebrow,
