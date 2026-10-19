@@ -2699,3 +2699,12 @@ a {
     scroll-behavior: auto !important;
   }
 }
+
+.message-model {
+  color: var(--faint);
+  font-size: 9px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

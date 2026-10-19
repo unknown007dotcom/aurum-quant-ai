@@ -4,3 +4,5 @@ temporary
 .vercel
 scratch
 *.log
+
+data/settings.local.json

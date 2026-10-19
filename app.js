@@ -100,7 +100,32 @@ let state = {
 function apiUrl(path) {
   const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${String(path || "")}`;
   const cleanBase = String(EDGE_API_BASE || "").replace(/\/+$/, "");
+  if (["/chat", "/ai-decision", "/ai-health"].includes(cleanPath)) return `/api${cleanPath}`;
   return `${cleanBase}${cleanPath}`;
+}
+
+let aiModelConfiguration = null;
+let aiModelConfigurationAt = 0;
+let aiModelRequest = null;
+async function loadAiModelConfiguration(force = false) {
+  if (!force && aiModelConfiguration && Date.now() - aiModelConfigurationAt < 60000) return aiModelConfiguration;
+  if (aiModelRequest) return aiModelRequest;
+  aiModelRequest = (async () => {
+    const response = await fetch(apiUrl("/chat"), { signal: AbortSignal.timeout(20000), headers: { Accept: "application/json" } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(data.models)) throw new Error(data.message || "AI model configuration is unavailable.");
+    const previousId = state.models.find(model => model.key === state.selectedModelKey)?.id;
+    state.models = data.models.map(model => ({ key: model.key, id: model.id, label: model.label || model.id, apiKey: "", baseUrl: APP_CONFIG.defaultBaseUrl }));
+    const available = new Set(state.models.map(model => model.id));
+    state.debateModels = state.debateModels.filter(model => available.has(model.id)).map(model => ({ ...model, apiKey: "", baseUrl: APP_CONFIG.defaultBaseUrl }));
+    state.selectedModelKey = state.models.find(model => model.id === previousId)?.key || data.defaultModelKey || state.models[0]?.key || "";
+    aiModelConfiguration = data;
+    aiModelConfigurationAt = Date.now();
+    saveLocalSettings();
+    renderModelDropdowns();
+    return data;
+  })();
+  try { return await aiModelRequest; } finally { aiModelRequest = null; }
 }
 
 const TIMEFRAME_TO_TRADINGVIEW = {
@@ -1483,23 +1508,23 @@ async function runAnalysis() {
         // --- Step 2: Consult AI arbiter ---
         dom.setStatus("Consulting Arbiter Council for Consensus...");
         const prompt = buildAiPrompt(analysis, mtfData);
+        await loadAiModelConfiguration().catch(() => null);
         const selectedModel = state.models.find(model => model.key === state.selectedModelKey) || state.models[0] || {};
 
         let aiRes, aiData;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000);
+        const aiTimeoutMs = state.debateMode === "full" ? 200000 : state.debateMode === "deep" ? 140000 : 90000;
+        const timeoutId = setTimeout(() => controller.abort(), aiTimeoutMs);
         try {
-            aiRes = await fetch(`${EDGE_API_BASE}${APP_CONFIG.aiChatPath}`, {
+            aiRes = await fetch(apiUrl(APP_CONFIG.aiChatPath), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     selectedModelKey: state.selectedModelKey,
                     model: selectedModel?.id,
                     label: selectedModel?.label,
-                    apiKey: selectedModel?.apiKey,
-                    baseUrl: selectedModel?.baseUrl,
-                    models: state.models,
-                    debateModels: state.debateModels,
+                    models: state.models.map(({ key, id, label }) => ({ key, id, label })),
+                    debateModels: state.debateModels.map(({ key, id, bias, isDebateParticipant }) => ({ key, id, bias, isDebateParticipant })),
                     debateMode: state.debateMode || "fast",
                     temperature: state.temperature,
                     prompt
@@ -1511,7 +1536,7 @@ async function runAnalysis() {
         } catch (aiErr) {
             clearTimeout(timeoutId);
             const isTimeout = aiErr.name === "AbortError";
-            const failReason = isTimeout ? "Browser request timed out (exceeded 60s safety limit)." : `AI network failed: ${aiErr.message}`;
+            const failReason = isTimeout ? `AI request exceeded the ${Math.round(aiTimeoutMs / 1000)}s safety limit.` : `AI network failed: ${aiErr.message}`;
             dom.setStatus(`Market analysis complete. ${failReason}`);
             const fallbackPayload = buildLocalAiFallback(analysis, failReason);
             renderAiUI(fallbackPayload, analysis);
@@ -1533,7 +1558,9 @@ async function runAnalysis() {
             return;
         }
 
-        if (aiData?.fallbackReason) {
+        if (aiData?.modelFallbackReason) {
+            dom.setStatus(`AI analysis by ${aiData.model}: ${aiData.modelFallbackReason}`);
+        } else if (aiData?.fallbackReason) {
             dom.setStatus(`AI Arbiter: ${aiData.fallbackReason}`);
         } else {
             dom.setStatus(`Preview complete | RMI: ${state.currentRmi} | Bias: ${state.rmiBias}`);
@@ -3157,66 +3184,26 @@ window.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': state.sessionPassword || '' } });
             const data = await response.json();
-            if (!data.isAdmin) {
+            if (!data.isAdmin && state.sessionPassword) {
                 dom.setStatus("Backend admin auth mismatch. Settings are loading in read-only mode.");
             }
             const settings = data.settings || {};
+            // Trading settings stay on the edge. AI credentials/models use Vercel,
+            // the same server that handles both Chat Mode and AI Analysis.
+            const aiResponse = await fetch("/api/settings", { headers: { "x-admin-password": state.sessionPassword || "" } });
+            const aiSettings = (await aiResponse.json().catch(() => ({}))).settings || {};
+            for (const key of ["globalNvidiaApiKey", "globalNvidiaApiKeys", "nvidiaModels", "debateModels", "defaultModelKey"]) settings[key] = aiSettings[key];
             if (dom.get("#marketDataKeysInput")) dom.get("#marketDataKeysInput").value = (settings.twelveDataKeys || []).join("\n");
             if (dom.get("#optionsDataKeysInput")) dom.get("#optionsDataKeysInput").value = (settings.polygonKeys || []).join("\n");
             if (dom.get("#alphaVantageKeysInput")) dom.get("#alphaVantageKeysInput").value = (settings.alphaVantageKeys || []).join("\n");
             if (dom.get("#globalNvidiaApiKeysInput")) dom.get("#globalNvidiaApiKeysInput").value = Array.isArray(settings.globalNvidiaApiKeys) && settings.globalNvidiaApiKeys.length ? settings.globalNvidiaApiKeys.join("\n") : (settings.globalNvidiaApiKey || "");
             if (dom.get("#oandaApiTokenInput")) dom.get("#oandaApiTokenInput").value = settings.oandaApiToken || "";
             if (dom.get("#oandaAccountIdInput")) dom.get("#oandaAccountIdInput").value = settings.oandaAccountId || "";
-            const permittedModels = new Set([
-                "meta/llama-3.1-8b-instruct",
-                "meta/llama-3.3-70b-instruct",
-                "abacusai/dracarys-llama-3.1-70b-instruct",
-                "meta/llama-4-maverick-17b-128e-instruct",
-                "mistralai/mistral-nemotron",
-                "nvidia/llama-3.3-nemotron-super-49b-v1",
-                "google/gemma-3n-e2b-it",
-                "google/gemma-3n-e4b-it",
-                "meta/llama-3.2-3b-instruct",
-                "mistralai/ministral-14b-instruct-2512",
-                "mistralai/mistral-large-3-675b-instruct-2512",
-                "mistralai/mistral-medium-3.5-128b",
-                "mistralai/mistral-small-4-119b-2603",
-                "mistralai/mixtral-8x7b-instruct-v0.1",
-                "nvidia/llama-3.1-nemotron-nano-8b-v1",
-                "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-                "nvidia/nemotron-3-super-120b-a12b",
-                "nvidia/nemotron-mini-4b-instruct",
-                "nvidia/nemotron-nano-12b-v2-vl",
-                "qwen/qwen3-coder-480b-a35b-instruct",
-                "qwen/qwen3.5-397b-a17b",
-                "stockmark/stockmark-2-100b-instruct",
-                "upstage/solar-10.7b-instruct",
-                "bytedance/seed-oss-36b-instruct",
-                "deepseek-ai/deepseek-v4-flash",
-                "deepseek-ai/deepseek-v4-pro",
-                "google/gemma-4-31b-it",
-                "meta/llama-3.1-70b-instruct",
-                "meta/llama-3.2-1b-instruct",
-                "microsoft/phi-4-mini-instruct",
-                "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-                "nvidia/nemotron-3-ultra-550b-a55b",
-                "qwen/qwen3-next-80b-a3b-instruct",
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "nvidia/nvidia-nemotron-nano-9b-v2",
-                "nvidia/nemotron-3-nano-30b-a3b"
-            ]);
-
             if (Array.isArray(settings.nvidiaModels) && settings.nvidiaModels.length) {
                 state.models = settings.nvidiaModels
-                    .filter((model) => permittedModels.has(String(model.id || "").trim()))
                     .map((model) => {
                         let modelId = model.id;
                         let label = model.label;
-                        if (modelId === "openai/gpt-oss-120b") {
-                            modelId = "meta/llama-3.1-70b-instruct";
-                            label = "Main Summary Model (Llama 3.1 70B)";
-                        }
                         return {
                             key: model.key,
                             id: modelId,
@@ -3231,7 +3218,6 @@ window.addEventListener('DOMContentLoaded', () => {
             }
             if (Array.isArray(settings.debateModels) && settings.debateModels.length) {
                 state.debateModels = settings.debateModels
-                    .filter((model) => permittedModels.has(String(model.id || "").trim()))
                     .map((model) => {
                         return {
                             key: model.key,
@@ -3266,6 +3252,8 @@ window.addEventListener('DOMContentLoaded', () => {
             setCustomSelectValue("oandaEnvironmentSelect", state.oandaEnvironment);
         } catch (e) {
             console.error("Failed to load settings", e);
+        } finally {
+            await loadAiModelConfiguration(true).catch(error => dom.setStatus(`AI configuration: ${error.message}`));
         }
     }
 
@@ -3302,7 +3290,9 @@ window.addEventListener('DOMContentLoaded', () => {
     async function saveAdminSettings(key, value) {
         try {
             const body = typeof key === "object" ? key : { [key]: value };
-            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, {
+            const aiFields = new Set(["globalNvidiaApiKey", "globalNvidiaApiKeys", "nvidiaModels", "debateModels", "defaultModelKey"]);
+            const aiOnly = Object.keys(body).every(field => aiFields.has(field));
+            const response = await fetch(aiOnly ? "/api/settings" : `${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, {
                 method: 'POST',
                 headers: { 'x-admin-password': state.sessionPassword || '', 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -3312,6 +3302,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 dom.setStatus(payload.message || "Failed to save settings.");
                 return false;
             }
+            if (aiOnly) await loadAiModelConfiguration(true);
             dom.setStatus("Settings saved successfully.");
             return true;
         } catch (e) {
@@ -3333,8 +3324,8 @@ window.addEventListener('DOMContentLoaded', () => {
             debateModels: state.debateModels,
             defaultModelKey: state.selectedModelKey
         });
-        window.syncAiBackendSettings = syncAiBackendSettings;
     }
+    window.syncAiBackendSettings = syncAiBackendSettings;
 
     const saveMarketKeysBtn = dom.get("#saveMarketKeysButton");
     if (saveMarketKeysBtn) saveMarketKeysBtn.onclick = () => {
@@ -3519,8 +3510,8 @@ function loadLocalSettings() {
 function saveLocalSettings() {
     try {
         const payload = {
-            models: state.models,
-            debateModels: state.debateModels,
+            models: state.models.map(({ apiKey, ...model }) => model),
+            debateModels: state.debateModels.map(({ apiKey, ...model }) => model),
             selectedModelKey: state.selectedModelKey,
             temperature: state.temperature,
             candleCount: state.candleCount,
@@ -3749,7 +3740,7 @@ function initSettingsUI() {
         importNvidiaBtn.disabled = true;
         setSettingsStatus("Fetching NVIDIA models...");
         try {
-            const res = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}?action=fetch-nvidia`, {
+            const res = await fetch("/api/settings?action=fetch-nvidia", {
                 method: 'POST',
                 headers: { 'x-admin-password': state.sessionPassword || '', 'Content-Type': 'application/json' },
                 body: JSON.stringify({ apiKey, baseUrl })

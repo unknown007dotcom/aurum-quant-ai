@@ -1,5 +1,7 @@
 import { AnalysisEngine } from "../../modules/analysis-engine.js";
-import { chatConfiguration, completeChat, ChatError } from "../../lib/chat-service.mjs";
+import { activeChatConfiguration, completeChat, ChatError } from "../../lib/chat-service.mjs";
+import { completeAnalysis } from "../../lib/analysis-service.mjs";
+import { checkNvidiaHealth, discoverModels, secureBaseUrl, NvidiaError } from "../../lib/nvidia-runtime.mjs";
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_INSTRUMENT = "XAU_USD";
 const HISTORY_LIMIT = 150;
@@ -253,7 +255,7 @@ export default {
       }
       return jsonResponse({ message: "Not found." }, request, 404);
     } catch (error) {
-      return jsonResponse({ message: error?.message || "Worker request failed." }, request, 502);
+      return jsonResponse({ message: error?.message || "Worker request failed.", code: error?.code || "worker_error", aiUsed: false }, request, error?.status || 502);
     }
   },
   async scheduled(event, env, ctx) {
@@ -267,7 +269,7 @@ async function handleChatResponse(request, env) {
   }
   try {
     const settings = await loadSettings(env);
-    if (request.method === "GET") return jsonResponse(chatConfiguration(settings, env), request);
+    if (request.method === "GET") return jsonResponse(await activeChatConfiguration(settings, env), request);
     const text = await request.text();
     if (text.length > 512 * 1024) throw new ChatError("Chat request is too large.", 413);
     let body;
@@ -458,335 +460,12 @@ function resolveBestModelReplacement(modelId, availableModels) {
 }
 
 async function handleAiDecision(request, env) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const startedAt = Date.now();
-
-  const body = await request.json().catch(() => ({}));
-  const prompt = String(body.prompt || "").trim();
-  if (!prompt) {
-    return { message: "Missing AI prompt." };
-  }
-
-  const settings = await loadSettings(env);
-  const temperature = Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.2;
-
-  // --- Load learning memory and append to prompt ---
-  const learningContext = await loadLearningContext(env);
-  const learningMemoryUsed = Number(learningContext.total || 0) > 0;
-  const promptWithLearning = appendLearningContext(prompt, learningContext);
-
-  // --- Collect all available API keys (deduplicated, ordered by priority) ---
-  const candidateKeys = [];
-  const addKey = (k) => { const s = String(k || "").trim(); if (s && !candidateKeys.includes(s)) candidateKeys.push(s); };
-
-  const bodyModels = Array.isArray(body.models) ? body.models : [];
-  const bodyDebateModels = Array.isArray(body.debateModels) ? body.debateModels : [];
-  const selectedKey = String(body.selectedModelKey || "");
-  const selectedModel = bodyModels.find((m) => m.key === selectedKey) || bodyModels[0];
-  if (selectedModel?.apiKey) addKey(selectedModel.apiKey);
-  bodyModels.forEach((m) => addKey(m?.apiKey));
-  bodyDebateModels.forEach((m) => addKey(m?.apiKey));
-  addKey(body.apiKey);
-  addKey(settings.globalNvidiaApiKey);
-  if (Array.isArray(settings.globalNvidiaApiKeys)) {
-    settings.globalNvidiaApiKeys.forEach((k) => addKey(k));
-  }
-  addKey(env.NVIDIA_API_KEY);
-
-  // --- Normalize model pools ---
-  const globalNvidiaKeys = normalizeNvidiaKeyPool(settings.globalNvidiaApiKeys, settings.globalNvidiaApiKey);
-  let summaryModels = normalizeModels(settings.nvidiaModels, bodyModels, globalNvidiaKeys, 0);
-  let debateModelPool = normalizeModels(settings.debateModels, bodyDebateModels, globalNvidiaKeys, summaryModels.length);
-  ({ summaryModels, debateModels: debateModelPool } = rebalanceModelPools(summaryModels, debateModelPool));
-
-  const fallbackModelConfig = normalizeOneModel({
-    key: selectedKey,
-    label: String(body.label || ""),
-    id: String(body.model || ""),
-    apiKey: String(body.apiKey || ""),
-    baseUrl: String(body.baseUrl || DEFAULT_BASE_URL),
-  }, globalNvidiaKeys, 0);
-
-  const logTiming = (fallbackUsed, fallbackReason, debateAttempted = 0, debateSuccessful = 0) => {
-    const finishedAt = Date.now();
-    console.log("[AI-DECISION-LOG]", JSON.stringify({
-      requestId,
-      startedAt: new Date(startedAt).toISOString(),
-      finishedAt: new Date(finishedAt).toISOString(),
-      durationMs: finishedAt - startedAt,
-      debateMode: body.debateMode || "fast",
-      debateModelsAttempted: debateAttempted,
-      debateModelsSuccessful: debateSuccessful,
-      leadModel: fallbackModelConfig?.id || "unknown",
-      providerStatus: candidateKeys.length ? "healthy" : "no_keys",
-      fallbackUsed,
-      fallbackReason,
-    }));
-  };
-
-  if (!candidateKeys.length) {
-    logTiming(true, "No API keys configured.", 0, 0);
-    return {
-      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: "No configured AI model or API key. Save your NVIDIA API key in Admin Settings." }), "server-fallback"),
-      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
-      learningMemoryUsed, fallbackUsed: true,
-      fallbackReason: "No API keys configured.",
-      debateMetrics: [],
-    };
-  }
-
-  // --- Resolve working NVIDIA access ---
-  const baseUrl = String(fallbackModelConfig.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const access = await resolveWorkingNvidiaAccess(candidateKeys, baseUrl);
-  if (!access.ok) {
-    logTiming(true, sanitizeProviderFailureReason(access.message), 0, 0);
-    return {
-      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: access.message }), fallbackModelConfig.id || "server-fallback"),
-      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
-      learningMemoryUsed, fallbackUsed: true,
-      fallbackReason: sanitizeProviderFailureReason(access.message),
-      keysAttempted: candidateKeys.length,
-      debateMetrics: [],
-    };
-  }
-
-  // Apply working access (key + baseUrl) to all model pools
-  summaryModels = applyWorkingAccess(summaryModels, access);
-  debateModelPool = applyWorkingAccess(debateModelPool, access);
-  if (fallbackModelConfig.id) {
-    fallbackModelConfig.apiKey = access.apiKey;
-    fallbackModelConfig.baseUrl = access.baseUrl;
-  }
-
-  // --- Select Lead Arbiter (summary) model ---
-  const selectedSummary =
-    summaryModels.find((m) => m.key === selectedKey) ||
-    debateModelPool.find((m) => m.key === selectedKey) ||
-    summaryModels[0] ||
-    debateModelPool[0] ||
-    fallbackModelConfig;
-
-  const resolvedModelId = access.modelIds.has(selectedSummary.id)
-    ? selectedSummary.id
-    : resolveBestModelReplacement(selectedSummary.id, access.models);
-
-  if (!resolvedModelId) {
-    logTiming(true, "No available NVIDIA models.", 0, 0);
-    return {
-      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: "No NVIDIA chat models are available to this key. Import NVIDIA models again from Settings." }), "server-fallback"),
-      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
-      learningMemoryUsed, fallbackUsed: true,
-      fallbackReason: "No available NVIDIA models.",
-      keysAttempted: candidateKeys.length,
-      debateMetrics: [],
-    };
-  }
-
-  selectedSummary.id = resolvedModelId;
-
-  const debateMode = body.debateMode || settings.debateMode || "fast";
-  const mode = DEBATE_MODES[debateMode] || DEBATE_MODES.fast;
-
-  // --- Build Debate Pool ---
-  const debatePool = buildDebatePool(debateModelPool, selectedSummary, mode.maxModels);
-
-  // --- No debate models: direct Lead Arbiter call ---
-  if (!debatePool.length) {
-    const direct = await requestAiModel({
-      modelConfig: selectedSummary,
-      prompt: promptWithLearning,
-      temperature,
-      systemPrompt: buildSummarySystemPrompt(),
-      maxTokens: mode.arbiterMaxTokens,
-    }, { timeoutMs: mode.arbiterTimeoutMs });
-
-    if (!direct.ok) {
-      const reason = direct.message || "Summary model unavailable.";
-      logTiming(true, sanitizeProviderFailureReason(reason), 0, 0);
-      return {
-        ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason }), selectedSummary.id),
-        debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
-        learningMemoryUsed, fallbackUsed: true,
-        fallbackReason: sanitizeProviderFailureReason(reason),
-        keysAttempted: candidateKeys.length,
-        debateMetrics: [],
-      };
-    }
-
-    logTiming(false, null, 0, 0);
-    direct.payload = enforceDirectionalOutput(direct.payload, promptWithLearning);
-    return {
-      ...normalizeAiPayload(direct.payload, promptWithLearning),
-      debateUsed: false, debateAttempted: 0, debateSuccessful: 0, debateWorking: 0,
-      debateConsensus: { buy: 0, sell: 0, wait: 0 },
-      learningMemoryUsed, fallbackUsed: false,
-      requestedModel: selectedSummary.label || selectedSummary.id,
-      finalModel: selectedSummary.id,
-      debateMetrics: [],
-    };
-  }
-
-  // --- Run Debate Models in Parallel (staggered) ---
-  const debateResults = await Promise.all(
-    debatePool.map(async (entry, index) => {
-      if (index > 0) {
-        await new Promise((resolve) => setTimeout(resolve, index * 100));
-      }
-      const startTime = Date.now();
-      const res = await requestAiModel({
-        modelConfig: entry.modelConfig,
-        prompt: buildDebateUserPrompt(promptWithLearning, entry.bias),
-        temperature,
-        systemPrompt: buildDebateSystemPrompt(),
-        maxTokens: mode.debateMaxTokens,
-      }, { timeoutMs: mode.timeoutMs });
-      return { ...res, durationMs: Date.now() - startTime };
-    })
-  );
-
-  const successfulDebates = debateResults
-    .map((result, index) => ({ result, model: debatePool[index] }))
-    .filter((item) => item.result.ok && extractAiText(item.result.payload));
-
-  const debateMetrics = debateResults.map((result, index) => {
-    const isSuccess = result.ok && Boolean(extractAiText(result.payload));
-    const modelConfig = debatePool[index]?.modelConfig;
-    return {
-      modelLabel: modelConfig?.label || modelConfig?.id || `Debate Model ${index + 1}`,
-      modelId: modelConfig?.id || "",
-      role: debatePool[index]?.bias || "both",
-      success: isSuccess,
-      statusCode: result.statusCode || (isSuccess ? 200 : 504),
-      durationMs: result.durationMs || 0,
-      sanitizedError: isSuccess ? null : sanitizeProviderFailureReason(result.message || "No usable output"),
-    };
-  });
-
-  const debateConsensus = calculateDebateConsensus(successfulDebates);
-
-  // --- All debates failed: fallback to direct Arbiter ---
-  if (!successfulDebates.length) {
-    const directSummary = await requestAiModel({
-      modelConfig: selectedSummary,
-      prompt: promptWithLearning,
-      temperature,
-      systemPrompt: buildSummarySystemPrompt(),
-      maxTokens: mode.arbiterMaxTokens,
-    }, { timeoutMs: mode.arbiterTimeoutMs });
-
-    if (directSummary.ok) {
-      logTiming(true, "Debate models timed out or failed; used direct summary.", debatePool.length, 0);
-      directSummary.payload = enforceDirectionalOutput(directSummary.payload, promptWithLearning);
-      return {
-        ...normalizeAiPayload(directSummary.payload, promptWithLearning),
-        debateUsed: false, debateAttempted: debatePool.length, debateSuccessful: 0, debateWorking: 0,
-        debateConsensus, learningMemoryUsed,
-        fallbackUsed: true, fallbackReason: "Debate models timed out or failed; used direct summary.",
-        requestedModel: selectedSummary.label || selectedSummary.id,
-        finalModel: selectedSummary.id,
-        debateMetrics,
-      };
-    }
-
-    const failReason = debateResults.map((r) => r.message).filter(Boolean).join(" | ") || directSummary.message || "All models timed out.";
-    logTiming(true, "All debate and summary models failed; server-generated summary used.", debatePool.length, 0);
-    return {
-      ...createTextPayload(buildServerFallbackSummary(promptWithLearning, { reason: failReason }), selectedSummary.id),
-      debateUsed: false, debateAttempted: debatePool.length, debateSuccessful: 0, debateWorking: 0,
-      debateConsensus, learningMemoryUsed,
-      fallbackUsed: true, fallbackReason: "All debate and summary models failed; server-generated summary used.",
-      requestedModel: selectedSummary.label || selectedSummary.id,
-      finalModel: selectedSummary.id,
-      debateMetrics,
-    };
-  }
-
-  // --- Build Consolidated Prompt & Call Lead Arbiter ---
-  const consolidatedPrompt = buildConsolidatedPrompt(promptWithLearning, successfulDebates);
-  const summaryResponse = await requestAiModel({
-    modelConfig: selectedSummary,
-    prompt: consolidatedPrompt,
-    temperature,
-    systemPrompt: buildSummarySystemPrompt(),
-    maxTokens: mode.arbiterMaxTokens,
-  }, { timeoutMs: mode.arbiterTimeoutMs });
-
-  if (!summaryResponse.ok) {
-    logTiming(true, "Debate completed, but final synthesis failed.", debatePool.length, successfulDebates.length);
-    const reason = summaryResponse.message || "Lead Arbiter model unavailable.";
-    return {
-      ...createTextPayload(buildServerFallbackSummary(consolidatedPrompt, { reason }), selectedSummary.id),
-      debateUsed: true, debateAttempted: debatePool.length, debateSuccessful: successfulDebates.length, debateWorking: successfulDebates.length,
-      debateConsensus, learningMemoryUsed,
-      fallbackUsed: true, fallbackReason: "Debate completed, but final synthesis failed.",
-      requestedModel: selectedSummary.label || selectedSummary.id,
-      finalModel: selectedSummary.id,
-      debateMetrics,
-      debateResponses: successfulDebates.map(d => ({
-        modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
-        modelId: d.model.modelConfig.id,
-        bias: d.model.bias,
-        output: extractAiText(d.result.payload)
-      }))
-    };
-  }
-
-  // --- Success: Return Full Debate Result ---
-  logTiming(false, null, debatePool.length, successfulDebates.length);
-  summaryResponse.payload = enforceDirectionalOutput(summaryResponse.payload, consolidatedPrompt);
-  return {
-    ...normalizeAiPayload(summaryResponse.payload, consolidatedPrompt),
-    debateUsed: true,
-    debateAttempted: debatePool.length,
-    debateSuccessful: successfulDebates.length,
-    debateWorking: successfulDebates.length,
-    debateConsensus,
-    learningMemoryUsed,
-    fallbackUsed: false,
-    requestedModel: selectedSummary.label || selectedSummary.id,
-    finalModel: selectedSummary.id,
-    debateMetrics,
-    debateResponses: successfulDebates.map(d => ({
-      modelLabel: d.model.modelConfig.label || d.model.modelConfig.id,
-      modelId: d.model.modelConfig.id,
-      bias: d.model.bias,
-      output: extractAiText(d.result.payload)
-    }))
-  };
+  const body = await request.json();
+  return completeAnalysis(body, await loadSettings(env), env);
 }
 
 async function handleAiHealth(request, env) {
-  const settings = await loadSettings(env);
-  const globalNvidiaKeys = normalizeNvidiaKeyPool(settings.globalNvidiaApiKeys, settings.globalNvidiaApiKey);
-  if (env.NVIDIA_API_KEY) globalNvidiaKeys.push(env.NVIDIA_API_KEY);
-  
-  const keyConfigured = globalNvidiaKeys.length > 0;
-  if (!keyConfigured) {
-    return {
-      provider: "NVIDIA",
-      keyConfigured: false,
-      keyValid: false,
-      selectedModel: null,
-      selectedModelAvailable: false,
-      lastCheckedAt: Date.now(),
-      status: "unhealthy",
-      error: "NVIDIA API key missing."
-    };
-  }
-
-  const access = await resolveWorkingNvidiaAccess(globalNvidiaKeys, DEFAULT_BASE_URL);
-  const selectedModelId = access.models?.[0]?.id || "meta/llama-3.1-8b-instruct";
-
-  return {
-    provider: "NVIDIA",
-    keyConfigured: true,
-    keyValid: access.ok,
-    selectedModel: selectedModelId,
-    selectedModelAvailable: access.ok,
-    lastCheckedAt: Date.now(),
-    status: access.ok ? "healthy" : "unhealthy",
-    error: access.ok ? null : access.message || "Model access failed."
-  };
+  return checkNvidiaHealth(await loadSettings(env), env);
 }
 
 async function resolveWorkingNvidiaAccess(candidateKeys, baseUrl) {
@@ -1660,41 +1339,15 @@ function computeMetrics(rows) {
 }
 
 async function handleFetchNvidia(body) {
-  const apiKey = String(body.apiKey || "").trim();
-  const baseUrl = String(body.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
-  if (!apiKey) throw new Error("Missing NVIDIA API key.");
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
-  try {
-    const response = await fetch(`${baseUrl}/models`, {
-      method: "GET",
-      headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.error?.message || payload?.message || `NVIDIA HTTP ${response.status}`);
-    const models = Array.isArray(payload?.data)
-      ? payload.data
-          .map((item) => ({ id: String(item?.id || ""), label: String(item?.id || "") }))
-          .filter((item) => item.id && item.id.length > 0)
-      : [];
-    const smokeModel = pickNvidiaSmokeTestModel(models);
-    if (!smokeModel) {
-      throw new Error("NVIDIA returned a catalog, but no chat-capable model was found to validate this key.");
-    }
-    const smoke = await validateNvidiaChatAccess({ apiKey, baseUrl, modelId: smokeModel.id, signal: controller.signal });
-    if (!smoke.ok) {
-      throw new Error(smoke.message || "NVIDIA key could fetch models but failed a chat validation request.");
-    }
-    return { models, count: models.length, baseUrl, validated: true, validationModel: smokeModel.id };
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error("NVIDIA model import timed out. Check the key, network, or try again.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  if (!apiKey) throw new NvidiaError("Missing NVIDIA API key.", 400, "invalid_request");
+  const baseUrl = secureBaseUrl(body.baseUrl || DEFAULT_BASE_URL);
+  const settings = { nvidiaModels: [{ key: "validation", id: "openai/gpt-oss-20b", apiKey, baseUrl }] };
+  const runtime = await discoverModels(settings);
+  const health = await checkNvidiaHealth(settings);
+  if (!health.completionVerified) throw new NvidiaError(health.error || "NVIDIA did not return a usable test reply.", 502, "health_check_failed");
+  const models = runtime.models.map(({ id, label }) => ({ id, label }));
+  return { models, count: models.length, baseUrl, validated: true, validationModel: health.selectedModel };
 }
 
 // ============================================================

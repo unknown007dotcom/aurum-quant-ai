@@ -1,268 +1,266 @@
 {
-  "oandaApiToken": "b228b6d0d19275bca9f6d50af7e59229-b8a32a361cfa128c61474633a249735d",
+  "oandaApiToken": "",
   "oandaAccountId": "",
-  "globalNvidiaApiKey": "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",
-  "globalNvidiaApiKeys": [
-    "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"
-  ],
+  "globalNvidiaApiKey": "",
+  "globalNvidiaApiKeys": [],
   "nvidiaModels": [
     {
       "key": "abacusai-dracarys-llama-3-1-70b-instruct",
       "id": "abacusai/dracarys-llama-3.1-70b-instruct",
       "label": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "bytedance-seed-oss-36b-instruct",
       "id": "bytedance/seed-oss-36b-instruct",
       "label": "bytedance/seed-oss-36b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "deepseek-ai-deepseek-v4-flash",
       "id": "deepseek-ai/deepseek-v4-flash",
       "label": "deepseek-ai/deepseek-v4-flash",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "deepseek-ai-deepseek-v4-pro",
       "id": "deepseek-ai/deepseek-v4-pro",
       "label": "deepseek-ai/deepseek-v4-pro",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "google-gemma-3n-e2b-it",
       "id": "google/gemma-3n-e2b-it",
       "label": "google/gemma-3n-e2b-it",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "google-gemma-3n-e4b-it",
       "id": "google/gemma-3n-e4b-it",
       "label": "google/gemma-3n-e4b-it",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "google-gemma-4-31b-it",
       "id": "google/gemma-4-31b-it",
       "label": "google/gemma-4-31b-it",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "meta-llama-3-1-70b-instruct",
       "id": "meta/llama-3.1-70b-instruct",
       "label": "meta/llama-3.1-70b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "meta-llama-3-1-8b-instruct",
       "id": "meta/llama-3.1-8b-instruct",
       "label": "meta/llama-3.1-8b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "meta-llama-3-2-1b-instruct",
       "id": "meta/llama-3.2-1b-instruct",
       "label": "meta/llama-3.2-1b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "meta-llama-3-2-3b-instruct",
       "id": "meta/llama-3.2-3b-instruct",
       "label": "meta/llama-3.2-3b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "meta-llama-3-3-70b-instruct",
       "id": "meta/llama-3.3-70b-instruct",
       "label": "meta/llama-3.3-70b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "meta-llama-4-maverick-17b-128e-instruct",
       "id": "meta/llama-4-maverick-17b-128e-instruct",
       "label": "meta/llama-4-maverick-17b-128e-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "microsoft-phi-4-mini-instruct",
       "id": "microsoft/phi-4-mini-instruct",
       "label": "microsoft/phi-4-mini-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "mistralai-ministral-14b-instruct-2512",
       "id": "mistralai/ministral-14b-instruct-2512",
       "label": "mistralai/ministral-14b-instruct-2512",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "mistralai-mistral-large-3-675b-instruct-2512",
       "id": "mistralai/mistral-large-3-675b-instruct-2512",
       "label": "mistralai/mistral-large-3-675b-instruct-2512",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "mistralai-mistral-medium-3-5-128b",
       "id": "mistralai/mistral-medium-3.5-128b",
       "label": "mistralai/mistral-medium-3.5-128b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "mistralai-mistral-nemotron",
       "id": "mistralai/mistral-nemotron",
       "label": "mistralai/mistral-nemotron",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "mistralai-mistral-small-4-119b-2603",
       "id": "mistralai/mistral-small-4-119b-2603",
       "label": "mistralai/mistral-small-4-119b-2603",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "mistralai-mixtral-8x7b-instruct-v0-1",
       "id": "mistralai/mixtral-8x7b-instruct-v0.1",
       "label": "mistralai/mixtral-8x7b-instruct-v0.1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-llama-3-1-nemotron-nano-8b-v1",
       "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",
       "label": "nvidia/llama-3.1-nemotron-nano-8b-v1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-llama-3-1-nemotron-nano-vl-8b-v1",
       "id": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
       "label": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-llama-3-3-nemotron-super-49b-v1",
       "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
       "label": "nvidia/llama-3.3-nemotron-super-49b-v1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-llama-3-3-nemotron-super-49b-v1-5",
       "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
       "label": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-nemotron-3-nano-30b-a3b",
       "id": "nvidia/nemotron-3-nano-30b-a3b",
       "label": "nvidia/nemotron-3-nano-30b-a3b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-nemotron-3-super-120b-a12b",
       "id": "nvidia/nemotron-3-super-120b-a12b",
       "label": "nvidia/nemotron-3-super-120b-a12b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-nemotron-3-ultra-550b-a55b",
       "id": "nvidia/nemotron-3-ultra-550b-a55b",
       "label": "nvidia/nemotron-3-ultra-550b-a55b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-nemotron-mini-4b-instruct",
       "id": "nvidia/nemotron-mini-4b-instruct",
       "label": "nvidia/nemotron-mini-4b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-nemotron-nano-12b-v2-vl",
       "id": "nvidia/nemotron-nano-12b-v2-vl",
       "label": "nvidia/nemotron-nano-12b-v2-vl",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "nvidia-nvidia-nemotron-nano-9b-v2",
       "id": "nvidia/nvidia-nemotron-nano-9b-v2",
       "label": "nvidia/nvidia-nemotron-nano-9b-v2",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "openai-gpt-oss-120b",
       "id": "meta/llama-3.1-70b-instruct",
       "label": "Main Summary Model (Llama 3.1 70B)",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "openai-gpt-oss-20b",
       "id": "openai/gpt-oss-20b",
       "label": "openai/gpt-oss-20b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "qwen-qwen3-coder-480b-a35b-instruct",
       "id": "qwen/qwen3-coder-480b-a35b-instruct",
       "label": "qwen/qwen3-coder-480b-a35b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "qwen-qwen3-next-80b-a3b-instruct",
       "id": "qwen/qwen3-next-80b-a3b-instruct",
       "label": "qwen/qwen3-next-80b-a3b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "qwen-qwen3-5-397b-a17b",
       "id": "qwen/qwen3.5-397b-a17b",
       "label": "qwen/qwen3.5-397b-a17b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "stockmark-stockmark-2-100b-instruct",
       "id": "stockmark/stockmark-2-100b-instruct",
       "label": "stockmark/stockmark-2-100b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     },
     {
       "key": "upstage-solar-10-7b-instruct",
       "id": "upstage/solar-10.7b-instruct",
       "label": "upstage/solar-10.7b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1"
     }
   ],
@@ -271,7 +269,7 @@
       "key": "abacusai-dracarys-llama-3-1-70b-instruct",
       "id": "abacusai/dracarys-llama-3.1-70b-instruct",
       "label": "abacusai/dracarys-llama-3.1-70b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -280,7 +278,7 @@
       "key": "bytedance-seed-oss-36b-instruct",
       "id": "bytedance/seed-oss-36b-instruct",
       "label": "bytedance/seed-oss-36b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -289,7 +287,7 @@
       "key": "deepseek-ai-deepseek-v4-flash",
       "id": "deepseek-ai/deepseek-v4-flash",
       "label": "deepseek-ai/deepseek-v4-flash",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -298,7 +296,7 @@
       "key": "deepseek-ai-deepseek-v4-pro",
       "id": "deepseek-ai/deepseek-v4-pro",
       "label": "deepseek-ai/deepseek-v4-pro",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -307,7 +305,7 @@
       "key": "google-gemma-3n-e2b-it",
       "id": "google/gemma-3n-e2b-it",
       "label": "google/gemma-3n-e2b-it",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -316,7 +314,7 @@
       "key": "google-gemma-3n-e4b-it",
       "id": "google/gemma-3n-e4b-it",
       "label": "google/gemma-3n-e4b-it",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -325,7 +323,7 @@
       "key": "google-gemma-4-31b-it",
       "id": "google/gemma-4-31b-it",
       "label": "google/gemma-4-31b-it",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -334,7 +332,7 @@
       "key": "meta-llama-3-1-70b-instruct",
       "id": "meta/llama-3.1-70b-instruct",
       "label": "meta/llama-3.1-70b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -343,7 +341,7 @@
       "key": "meta-llama-3-1-8b-instruct",
       "id": "meta/llama-3.1-8b-instruct",
       "label": "meta/llama-3.1-8b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -352,7 +350,7 @@
       "key": "meta-llama-3-2-1b-instruct",
       "id": "meta/llama-3.2-1b-instruct",
       "label": "meta/llama-3.2-1b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -361,7 +359,7 @@
       "key": "meta-llama-3-2-3b-instruct",
       "id": "meta/llama-3.2-3b-instruct",
       "label": "meta/llama-3.2-3b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -370,7 +368,7 @@
       "key": "meta-llama-3-3-70b-instruct",
       "id": "meta/llama-3.3-70b-instruct",
       "label": "meta/llama-3.3-70b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -379,7 +377,7 @@
       "key": "meta-llama-4-maverick-17b-128e-instruct",
       "id": "meta/llama-4-maverick-17b-128e-instruct",
       "label": "meta/llama-4-maverick-17b-128e-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -388,7 +386,7 @@
       "key": "microsoft-phi-4-mini-instruct",
       "id": "microsoft/phi-4-mini-instruct",
       "label": "microsoft/phi-4-mini-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -397,7 +395,7 @@
       "key": "mistralai-ministral-14b-instruct-2512",
       "id": "mistralai/ministral-14b-instruct-2512",
       "label": "mistralai/ministral-14b-instruct-2512",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -406,7 +404,7 @@
       "key": "mistralai-mistral-large-3-675b-instruct-2512",
       "id": "mistralai/mistral-large-3-675b-instruct-2512",
       "label": "mistralai/mistral-large-3-675b-instruct-2512",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -415,7 +413,7 @@
       "key": "mistralai-mistral-medium-3-5-128b",
       "id": "mistralai/mistral-medium-3.5-128b",
       "label": "mistralai/mistral-medium-3.5-128b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -424,7 +422,7 @@
       "key": "mistralai-mistral-nemotron",
       "id": "mistralai/mistral-nemotron",
       "label": "mistralai/mistral-nemotron",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -433,7 +431,7 @@
       "key": "mistralai-mistral-small-4-119b-2603",
       "id": "mistralai/mistral-small-4-119b-2603",
       "label": "mistralai/mistral-small-4-119b-2603",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -442,7 +440,7 @@
       "key": "mistralai-mixtral-8x7b-instruct-v0-1",
       "id": "mistralai/mixtral-8x7b-instruct-v0.1",
       "label": "mistralai/mixtral-8x7b-instruct-v0.1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -451,7 +449,7 @@
       "key": "nvidia-llama-3-1-nemotron-nano-8b-v1",
       "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",
       "label": "nvidia/llama-3.1-nemotron-nano-8b-v1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -460,7 +458,7 @@
       "key": "nvidia-llama-3-1-nemotron-nano-vl-8b-v1",
       "id": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
       "label": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -469,7 +467,7 @@
       "key": "nvidia-llama-3-3-nemotron-super-49b-v1",
       "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
       "label": "nvidia/llama-3.3-nemotron-super-49b-v1",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -478,7 +476,7 @@
       "key": "nvidia-llama-3-3-nemotron-super-49b-v1-5",
       "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
       "label": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -487,7 +485,7 @@
       "key": "nvidia-nemotron-3-nano-30b-a3b",
       "id": "nvidia/nemotron-3-nano-30b-a3b",
       "label": "nvidia/nemotron-3-nano-30b-a3b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -496,7 +494,7 @@
       "key": "nvidia-nemotron-3-super-120b-a12b",
       "id": "nvidia/nemotron-3-super-120b-a12b",
       "label": "nvidia/nemotron-3-super-120b-a12b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -505,7 +503,7 @@
       "key": "nvidia-nemotron-3-ultra-550b-a55b",
       "id": "nvidia/nemotron-3-ultra-550b-a55b",
       "label": "nvidia/nemotron-3-ultra-550b-a55b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -514,7 +512,7 @@
       "key": "nvidia-nemotron-mini-4b-instruct",
       "id": "nvidia/nemotron-mini-4b-instruct",
       "label": "nvidia/nemotron-mini-4b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -523,7 +521,7 @@
       "key": "nvidia-nemotron-nano-12b-v2-vl",
       "id": "nvidia/nemotron-nano-12b-v2-vl",
       "label": "nvidia/nemotron-nano-12b-v2-vl",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -532,7 +530,7 @@
       "key": "nvidia-nvidia-nemotron-nano-9b-v2",
       "id": "nvidia/nvidia-nemotron-nano-9b-v2",
       "label": "nvidia/nvidia-nemotron-nano-9b-v2",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -541,7 +539,7 @@
       "key": "openai-gpt-oss-120b",
       "id": "openai/gpt-oss-120b",
       "label": "openai/gpt-oss-120b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -550,7 +548,7 @@
       "key": "openai-gpt-oss-20b",
       "id": "openai/gpt-oss-20b",
       "label": "openai/gpt-oss-20b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -559,7 +557,7 @@
       "key": "qwen-qwen3-coder-480b-a35b-instruct",
       "id": "qwen/qwen3-coder-480b-a35b-instruct",
       "label": "qwen/qwen3-coder-480b-a35b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -568,7 +566,7 @@
       "key": "qwen-qwen3-next-80b-a3b-instruct",
       "id": "qwen/qwen3-next-80b-a3b-instruct",
       "label": "qwen/qwen3-next-80b-a3b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -577,7 +575,7 @@
       "key": "qwen-qwen3-5-397b-a17b",
       "id": "qwen/qwen3.5-397b-a17b",
       "label": "qwen/qwen3.5-397b-a17b",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -586,7 +584,7 @@
       "key": "stockmark-stockmark-2-100b-instruct",
       "id": "stockmark/stockmark-2-100b-instruct",
       "label": "stockmark/stockmark-2-100b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true
@@ -595,7 +593,7 @@
       "key": "upstage-solar-10-7b-instruct",
       "id": "upstage/solar-10.7b-instruct",
       "label": "upstage/solar-10.7b-instruct",
-      "apiKey": "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",
+      "apiKey": "",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "bias": "both",
       "isDebateParticipant": true

@@ -22,7 +22,7 @@ import {
   ChatError,
   chatConfiguration,
   validateChatRequest,
-  completeChat,
+  completeChat as completeChatService,
 } from "../lib/chat-service.mjs";
 import worker from "../cloudflare-backend/src/index.js";
 
@@ -34,10 +34,24 @@ const request = (overrides = {}) => ({
 const settings = {
   globalNvidiaApiKey: "test-server-only-key",
   defaultModelKey: "model-a",
-  nvidiaModels: [{ key: "model-a", id: "test/model", label: "Test model" }],
+  nvidiaModels: [
+    { key: "model-a", id: "test/instruct-model", label: "Test model" },
+  ],
 };
 const successfulFetch = async () =>
   Response.json({ choices: [{ message: { content: "A helpful response." } }] });
+const withCatalog = (fetchImpl) => async (url, options) =>
+  url.endsWith("/models")
+    ? Response.json({
+        data: [
+          { id: "test/instruct-model" },
+          { id: "openai/gpt-oss-20b" },
+          { id: "openai/gpt-oss-120b" },
+        ],
+      })
+    : fetchImpl(url, options);
+const completeChat = (body, settings, env, fetchImpl = successfulFetch) =>
+  completeChatService(body, settings, env, withCatalog(fetchImpl));
 
 // Browser-independent state and rendering tests.
 test("new chats have separate identities and independent settings", () => {
@@ -212,7 +226,7 @@ test("public configuration exposes model names, never provider keys or URLs", ()
     ],
   });
   assert.deepEqual(config.models, [
-    { key: "model-a", id: "test/model", label: "Test model" },
+    { key: "model-a", id: "test/instruct-model", label: "Test model" },
   ]);
   assert.equal(config.configured, true);
   assert.ok(!JSON.stringify(config).includes("private"));
@@ -225,7 +239,7 @@ test("empty model settings have an explicit default and truthful setup status", 
     chatConfiguration({}, { NVIDIA_API_KEY: "env-key" }).configured,
     true,
   );
-  assert.equal(chatConfiguration().models[0].id, "openai/gpt-oss-120b");
+  assert.equal(chatConfiguration().models[0].id, "openai/gpt-oss-20b");
 });
 
 test("rejects empty, malformed, system-role, and oversized requests", () => {
@@ -285,7 +299,7 @@ test("provider requests retain context, zero temperature, and chosen response st
   );
   assert.deepEqual(result, {
     content: "A helpful response.",
-    model: "test/model",
+    model: "test/instruct-model",
   });
 });
 
@@ -315,7 +329,7 @@ test("removed default model falls back while an explicitly removed model errors"
   assert.equal(chatConfiguration(changed).defaultModelKey, "model-a");
   assert.equal(
     (await completeChat(request(), changed, {}, successfulFetch)).model,
-    "test/model",
+    "test/instruct-model",
   );
   await assert.rejects(
     completeChat(
@@ -412,11 +426,18 @@ test("empty, broken, timed out, and failed provider responses do not become chat
 // The same service is wired into both deployed API runtimes.
 test("Cloudflare chat route returns public configuration and validates methods/body", async () => {
   const env = { AURUM_KV: { get: async () => JSON.stringify(settings) } };
-  const config = await worker.fetch(
-    new Request("https://worker.example/chat"),
-    env,
-    {},
-  );
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = withCatalog(successfulFetch);
+  let config;
+  try {
+    config = await worker.fetch(
+      new Request("https://worker.example/chat"),
+      env,
+      {},
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
   assert.equal(config.status, 200);
   assert.equal(config.headers.get("Cache-Control"), "no-store");
   assert.ok(
@@ -470,7 +491,7 @@ test("Node/Vercel adapter validates JSON and propagates safe provider results", 
     },
   });
   try {
-    globalThis.fetch = successfulFetch;
+    globalThis.fetch = withCatalog(successfulFetch);
     const valid = response();
     await handler({ method: "POST", body: JSON.stringify(request()) }, valid);
     assert.equal(valid.code, 200);

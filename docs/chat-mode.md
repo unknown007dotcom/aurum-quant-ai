@@ -37,9 +37,11 @@ The browser only calls same-origin `/api/chat`:
 - Successful reply: `{ content, model }`.
 - Failure: a suitable HTTP status with `{ message }`.
 
-`api-handlers/chat.js` supports the existing Node server and Vercel router. It forwards to the Cloudflare Worker's `/chat` endpoint to reuse the terminal's KV-stored model configuration. A locally set `NVIDIA_API_KEY` selects local execution. If the edge route has not been deployed or is unreachable, the adapter falls back to the existing server-side settings loader. `CLOUDFLARE_WORKER_URL` can override the existing default edge URL.
+`api-handlers/chat.js`, `/api/ai-decision`, and `/api/ai-health` now use the same server-side configuration and `lib/nvidia-runtime.mjs`. They no longer depend on a separately deployed edge chat route. A permanent `NVIDIA_API_KEY` takes precedence over saved keys; otherwise protected server settings provide the credentials.
 
-`lib/chat-service.mjs` is shared with the Cloudflare Worker so validation, model selection, prompts, timeouts, and sanitized errors stay consistent. Only server-configured model IDs/endpoints/credentials are used. To use KV-backed production settings, deploy the updated Worker along with the frontend/API; no deployment is performed by this code change.
+Model discovery checks NVIDIA's current catalog, filters non-chat tasks, and stops selecting missing models. Catalog membership is not proof of a working completion: `/api/ai-health` must receive visible response text. Retired or failing models can fall back to an active model, with the actual responding model exposed in the response and chat UI. Empty responses and provider failures are errors, never invented AI answers. Reasoning models receive an appropriate completion budget.
+
+The Cloudflare source uses the shared AI services too, but changing the Vercel deployment does not automatically update an existing Worker. Browser AI requests stay on the verified Vercel path; market-data and trading endpoints remain separate.
 
 The conversational system prompt is separate from the trade-decision engine. It provides no live market-data feed or execution tools and explicitly requires hypothetical examples to be labeled. Chat Mode never starts, stops, or places trades.
 
@@ -50,6 +52,7 @@ npm test                 # Existing analysis tests + chat state/service/adapter 
 npm run check-build      # Cloudflare bundle validation, no deployment
 npx playwright install chromium # One-time setup for browser regression tests
 npm run test:chat-layout # Docking, mobile drawers, resize, and interaction checks
+npm run test:ai-ui       # Real terminal controller, mocked HTTP, no trading
 node server.js           # Manual/browser verification at /chat.html
 ```
 

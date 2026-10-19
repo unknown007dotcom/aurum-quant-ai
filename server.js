@@ -117,24 +117,25 @@ const CLOUDFLARE_BACKEND = process.env.CLOUDFLARE_WORKER_URL || "https://aurum-q
 
 async function serveApiRoute(nodeReq, nodeRes, requestUrl) {
   const relativeRoute = requestUrl.pathname.replace(/^\/api\//, "");
-  // Chat has a same-origin adapter for both the edge and local configurations.
-  if (relativeRoute === "chat") {
+  // Match production: all AI execution and AI settings use the same Node backend.
+  const localAiHandlers = { chat: "chat", "ai-decision": "ai-decision", "ai-health": "ai-health", settings: "settings" };
+  if (Object.hasOwn(localAiHandlers, relativeRoute)) {
     nodeReq.query = Object.fromEntries(requestUrl.searchParams.entries());
     const chunks = [];
     let bytes = 0;
     for await (const chunk of nodeReq) {
       bytes += chunk.length;
-      if (bytes > 512 * 1024) return sendJson(nodeRes, 413, { message: "Chat request is too large." });
+      if (bytes > 512 * 1024) return sendJson(nodeRes, 413, { message: "API request is too large." });
       chunks.push(chunk);
     }
     try {
       const text = Buffer.concat(chunks).toString("utf8");
       nodeReq.body = text ? JSON.parse(text) : {};
     } catch {
-      return sendJson(nodeRes, 400, { message: "Send a valid JSON chat request." });
+      return sendJson(nodeRes, 400, { message: "Send a valid JSON request." });
     }
     const responseAdapter = createResponseAdapter(nodeRes);
-    await require("./api-handlers/chat")(nodeReq, responseAdapter);
+    await require(`./api-handlers/${localAiHandlers[relativeRoute]}`)(nodeReq, responseAdapter);
     if (!responseAdapter.finished) responseAdapter.end();
     return;
   }
@@ -247,6 +248,9 @@ function createResponseAdapter(nodeRes) {
 
 function serveStatic(requestPath, res) {
   const safePath = requestPath === "/" ? "/index.html" : requestPath;
+  const publicFiles = new Set(["/index.html", "/chat.html", "/history.html", "/app.js", "/chat.js", "/history.js", "/styles.css", "/chat.css", "/logo.svg", "/favicon.svg", "/candle_guide.png"]);
+  const publicAsset = /^\/(?:assets|modules)\//.test(safePath) && !safePath.split("/").some(part => part.startsWith("."));
+  if (!publicFiles.has(safePath) && !publicAsset) return sendJson(res, 404, { message: "File not found." });
   const filePath = path.join(ROOT, safePath);
   const normalizedPath = path.normalize(filePath);
 

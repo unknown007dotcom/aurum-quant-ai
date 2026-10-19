@@ -187,6 +187,11 @@ function messageNode(message, index) {
     time.dateTime = new Date(message.createdAt).toISOString();
     meta.append(time);
   }
+  if (message.role === "assistant" && message.model) {
+    const actualModel = element("span", "message-model", message.model);
+    actualModel.title = `Actual response model: ${message.model}`;
+    meta.append(actualModel);
+  }
   const body = element("div", "message-body");
   if (message.role === "assistant")
     body.innerHTML = formatMessage(message.content);
@@ -455,6 +460,10 @@ async function requestReply(regenerate = false) {
     if (typeof payload.content !== "string" || !payload.content.trim())
       throw new Error("The AI returned an empty response. Please try again.");
     if (pending !== operation) return;
+    if (payload.modelFallbackUsed)
+      toast(
+        `The selected model was unavailable. ${payload.model} answered instead.`,
+      );
     const message = {
       id: newId(),
       role: "assistant",
@@ -578,8 +587,9 @@ async function loadConfiguration() {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(10000),
     });
-    if (!response.ok) throw new Error("Unavailable");
     const data = await response.json();
+    if (!response.ok)
+      throw new Error(data.message || "AI configuration is unavailable.");
     if (!Array.isArray(data.models)) throw new Error("Invalid configuration");
     configuration = {
       models: data.models.filter(
@@ -595,6 +605,19 @@ async function loadConfiguration() {
     configuration.models.forEach((model) =>
       $("chatModel").append(new Option(model.label, model.key)),
     );
+    if (
+      Array.isArray(data.unavailableModels) &&
+      data.unavailableModels.some(
+        (model) =>
+          model.key === current.settings.modelKey ||
+          model.id === current.settings.modelKey,
+      )
+    ) {
+      updateSettings({ modelKey: "" });
+      toast(
+        "Your previous model is no longer available. Switched to an active model.",
+      );
+    }
     setProviderStatus(
       configuration.configured ? "configured" : "setup",
       configuration.configured
@@ -602,11 +625,12 @@ async function loadConfiguration() {
         : "Add an API key in Terminal Settings",
     );
     renderSettings();
-  } catch {
+  } catch (error) {
     setProviderStatus(
       "unavailable",
-      "Connection unavailable · your chats stay saved",
+      "AI configuration unavailable · your chats stay saved",
     );
+    $("providerStatus").title = error.message;
   }
 }
 
