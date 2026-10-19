@@ -42,8 +42,9 @@ let current =
   state.conversations.find((chat) => chat.id === state.activeId) ||
   createChat(state.defaults);
 if (!state.activeId) current.draft = state.draft;
-const historyMedia = matchMedia("(max-width: 800px)");
-const settingsMedia = matchMedia("(max-width: 1180px)");
+// Keep these in sync with the phone/tablet drawer queries in chat.css.
+const historyMedia = matchMedia("(max-width: 899px)");
+const settingsMedia = matchMedia("(max-width: 640px)");
 
 function toast(message) {
   clearTimeout(toastTimer);

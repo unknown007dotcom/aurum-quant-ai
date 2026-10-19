@@ -6,13 +6,15 @@
     "dev": "wrangler dev",
     "publish": "wrangler publish",
     "test": "node tests/analysis-engine.test.js && node --test tests/chat.test.mjs",
-    "check-build": "wrangler deploy --dry-run"
+    "check-build": "wrangler deploy --dry-run",
+    "test:chat-layout": "node tests/chat-layout.browser.cjs"
   },
   "dependencies": {
     "firebase": "^12.12.1",
     "firebase-admin": "^12.5.0"
   },
   "devDependencies": {
+    "playwright": "1.64.1",
     "wrangler": "^3.0.0"
   }
 }

@@ -21,8 +21,8 @@
       type="font/woff2"
       crossorigin
     />
-    <link rel="stylesheet" href="./chat.css?v=2" />
-    <script type="module" src="./chat.js?v=1"></script>
+    <link rel="stylesheet" href="./chat.css?v=3" />
+    <script type="module" src="./chat.js?v=2"></script>
   </head>
   <body>
     <a class="skip-link" href="#messageInput">Skip to chat</a>
@@ -203,7 +203,7 @@
             </div>
             <div class="conversation-actions">
               <button
-                class="icon-button settings-mobile-toggle"
+                class="icon-button settings-panel-toggle settings-mobile-toggle"
                 id="chatSettingsToggle"
                 type="button"
                 aria-label="Open chat settings"
@@ -213,6 +213,7 @@
                 <svg class="icon" aria-hidden="true">
                   <use href="./assets/chat-icons.svg#sliders" />
                 </svg>
+                <span>Settings</span>
               </button>
               <details class="conversation-menu" id="conversationMenu">
                 <summary

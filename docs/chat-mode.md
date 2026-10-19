@@ -9,7 +9,7 @@ The page is a standalone, light-and-gold, three-column chat workspace inspired b
 - **Left:** new conversation, search, date-grouped saved chats, and clearly labeled example conversations. Examples are not saved as user history until continued.
 - **Center:** conversation starters, Markdown/text replies, a growing composer, copy, regenerate, retry, and stop controls. The conversation menu supports rename, Markdown export, and confirmed deletion.
 - **Right:** model selection, response length, creativity, conversation context, Enter-to-send, reset, and a custom image area. Settings are saved per conversation and are used as defaults for new chats.
-- **Mobile/tablet:** independently scrollable side drawers, backdrop dismissal, Escape handling, focus containment, and restored focus. Reduced-motion preferences are respected.
+- **Responsive layout:** both sidebars stay docked at 900px and wider. From 641–899px, history becomes a drawer while settings stays visible on the right. At 640px and below, a labeled **Settings** button opens the right-hand drawer. Drawers support independent scrolling, backdrop dismissal, Escape, focus containment, and restored focus. Reduced-motion preferences are respected.
 
 ## Image area
 
@@ -48,6 +48,8 @@ The conversational system prompt is separate from the trade-decision engine. It 
 ```sh
 npm test                 # Existing analysis tests + chat state/service/adapter tests
 npm run check-build      # Cloudflare bundle validation, no deployment
+npx playwright install chromium # One-time setup for browser regression tests
+npm run test:chat-layout # Docking, mobile drawers, resize, and interaction checks
 node server.js           # Manual/browser verification at /chat.html
 ```
 
