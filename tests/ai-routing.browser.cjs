@@ -100,7 +100,7 @@ const server = http.createServer(async (req, res) => {
     const errors = [];
     const prohibited = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const candles = Array.from({ length: 240 }, (_, i) => ({
+    const candles = Array.from({ length: 1000 }, (_, i) => ({
       datetime: new Date(Date.UTC(2026, 9, 19) + i * 900000).toISOString(),
       open: 4000 + i * 0.15,
       close: 4000.08 + i * 0.15,
@@ -249,6 +249,7 @@ const server = http.createServer(async (req, res) => {
     assert.ok(!Object.hasOwn(calls[0].body, "apiKey"));
     assert.ok(!Object.hasOwn(calls[0].body, "baseUrl"));
     assert.ok(calls[0].body.prompt.length > 0);
+    assert.ok(calls[0].body.prompt.length < 90000, "Market prompt must leave room for server-side learning context.");
     assert.deepEqual(prohibited, []);
     assert.deepEqual(errors, []);
     console.log(

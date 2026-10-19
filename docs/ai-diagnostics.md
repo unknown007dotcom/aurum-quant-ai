@@ -18,6 +18,28 @@ The audit was run from an isolated Vercel **preview build**, because the coding 
 
 The saved Vercel settings contained one primary model and 132 debate entries, including embeddings, safety classifiers, vision/task-specific models, and obsolete IDs. The audit exercised the distinct configured IDs across the saved/repository/edge configurations. Many returned HTTP 410; some IDs listed in the catalog still returned HTTP 404 from chat completions. **A catalog record does not establish chat capability or a successful completion.** This document summarizes confirmed findings rather than claiming every catalog model is operational.
 
+## Verified production release
+
+Release commit: `6948323195a78d7fef40f07bf943c9f6e6f5d22d`.
+Vercel promoted the repaired release after its live checks passed. The release
+receipt is timestamped **2026-10-19 18:20:13 UTC**.
+
+| Live check after repair | Result |
+| --- | --- |
+| Packaged chat API, real NVIDIA completion | Passed; `openai/gpt-oss-20b` |
+| Packaged analysis API, real structured completion | Passed; `aiUsed: true`, `fallbackUsed: false`, `openai/gpt-oss-20b` |
+| Public production `/api/ai-health` | `healthy`, `keyValid: true`, `completionVerified: true` |
+| Model selection | 41 catalog-eligible chat candidates; 98 saved entries excluded by current catalog filtering |
+| Local regression suite | 56 passing unit/analysis tests; chat-layout and terminal-routing browser suites passed |
+| Trading side effects | No orders or bot-control commands were executed by verification |
+
+The 41 candidates are **catalog-eligible**, not a claim that all 41 have been
+individually verified as healthy on every request. Unavailable providers/models
+remain external failures and are handled explicitly.
+
+[Live release receipt](https://aurum-quant-ai.vercel.app/ai-release-check.json) ·
+[Current selected-model health](https://aurum-quant-ai.vercel.app/api/ai-health)
+
 ## Causes repaired
 
 1. The browser rewrote `openai/gpt-oss-120b` to the retired Llama 3.1 70B ID while keeping the old model key.
