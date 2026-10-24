@@ -34,7 +34,7 @@ async function post(route, body) {
   );
   return { payload, durationMs: Date.now() - started };
 }
-async function verifyHttp() {
+async function verifyChatHttp() {
   const marker = "AURUM_" + randomBytes(5).toString("hex").toUpperCase();
   const firstMessage = {
     role: "user",
@@ -67,7 +67,7 @@ async function verifyHttp() {
   });
   assert.ok(
     followup.payload.content?.includes(marker),
-    "The reply must use the actual conversation, not a canned response",
+    `Expected the conversation code ${marker}; received ${JSON.stringify(followup.payload.content).slice(0, 400)} (first reply: ${JSON.stringify(first.payload.content).slice(0, 100)})`,
   );
   emit({
     check: "saved-model-and-conversation-context",
@@ -76,6 +76,8 @@ async function verifyHttp() {
     modelFallbackUsed: Boolean(followup.payload.modelFallbackUsed),
     durationMs: followup.durationMs,
   });
+}
+async function verifyAnalysisHttp() {
   const analysis = await post("/api/ai-decision", {
     selectedModelKey: "gpt-oss-default",
     debateMode: "fast",
@@ -139,13 +141,16 @@ async function verifyBrowser() {
     await page.route("**/*", (route) => {
       const request = route.request();
       const url = new URL(request.url());
-      if (
-        url.origin === ORIGIN &&
-        (request.method() === "GET" ||
-          (request.method() === "POST" && url.pathname === "/api/chat"))
-      )
-        return route.continue();
-      if (request.method() !== "GET") prohibited.push(url.pathname);
+      if (url.origin === ORIGIN) {
+        const chatApi =
+          url.pathname === "/api/chat" &&
+          ["GET", "POST"].includes(request.method());
+        const staticAsset =
+          request.method() === "GET" && !url.pathname.startsWith("/api/");
+        if (chatApi || staticAsset) return route.continue();
+      }
+      if (request.method() !== "GET" || url.pathname.startsWith("/api/"))
+        prohibited.push(url.pathname);
       return route.abort();
     });
     await page.addInitScript(
@@ -244,8 +249,27 @@ async function verifyBrowser() {
   }
 }
 (async () => {
-  await verifyHttp();
-  if (process.argv.includes("--browser")) await verifyBrowser();
+  const failures = [];
+  const checks = [
+    ["http-chat", verifyChatHttp],
+    ["http-analysis", verifyAnalysisHttp],
+  ];
+  if (process.argv.includes("--browser"))
+    checks.push(["browser-chat", verifyBrowser]);
+  for (const [check, run] of checks) {
+    try {
+      await run();
+    } catch (error) {
+      failures.push(check);
+      emit({
+        check,
+        ok: false,
+        message: String(error.message)
+          .replace(/nvapi-[a-z0-9_-]+/gi, "[REDACTED]")
+          .slice(0, 700),
+      });
+    }
+  }
   const report = {
     checkedAt: new Date().toISOString(),
     origin: ORIGIN,
@@ -257,6 +281,8 @@ async function verifyBrowser() {
       process.env.AURUM_VERIFY_REPORT,
       JSON.stringify(report, null, 2),
     );
+  if (failures.length)
+    throw new Error(`Live checks failed: ${failures.join(", ")}`);
   emit({ check: "complete", ok: true, tradesExecuted: false });
 })().catch((error) => {
   console.error(
