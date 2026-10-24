@@ -1,5 +1,7 @@
 # AI diagnostics and repair — 2026-10-19
 
+> Follow-up: the [24 October response-recovery audit](ai-response-recovery.md) found and repaired additional saved-model and template-output failures, with real HTTP and browser verification.
+
 ## Observed production failures
 
 The audit was run from an isolated Vercel **preview build**, because the coding sandbox cannot connect directly to NVIDIA. No bot, order, or trading-control endpoint was called. The temporary diagnostic credential was supplied as a sensitive preview-only environment variable, never written to the repository, and removed afterwards. The diagnostic deployment was also deleted.

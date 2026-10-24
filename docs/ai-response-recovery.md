@@ -40,4 +40,26 @@ npm run verify:live-ai -- --browser
 
 These opt-in checks make genuine, small provider requests. They verify fresh replies, conversation context, stale-model recovery, meaningful analysis, and an actual browser-visible Mira reply. They do not invoke orders, bot controls, history writes, or settings updates. The optional `AURUM_VERIFY_ORIGIN` selects the deployment; `AURUM_VERIFY_REPORT` writes a non-secret JSON receipt.
 
-Production verification results are recorded after deployment. The existing Worker is not redeployed by the Vercel release; the web app's chat and analysis use the same-origin Vercel API.
+## Verified production result
+
+Application commit: `e11302a19091fa01bb70b7082ac4ebd139264b63`.
+Production deployment: `dpl_AsPhtqJJeVbie5a9mG2BHLcaFJf2`, **READY / PROMOTED**.
+The public release receipt is timestamped **24 October 2026, 16:35:21 UTC**.
+
+The post-deployment verifier (`c810070`) exercised the real public API and a real Chromium browser against `https://aurum-quant-ai.vercel.app`, without mocked AI responses. Its completed run at approximately **16:39:30 UTC** reported:
+
+| Live check | Result | Observed time |
+| --- | --- | ---: |
+| Default chat | Real GPT-OSS 20B completion | 1.013 s |
+| Historic saved model key + conversation context | Real answer containing the fresh conversation marker; fallback disclosed | 1.773 s |
+| Structured analysis | Real, non-template findings; `aiUsed: true`, `fallbackUsed: false`, Stay Flat and N/A price fields | 5.135 s |
+| Chat Mode browser retry | Mira's actual reply appeared; both stale history selections recovered; zero page errors | 1.361 s |
+| Public AI health | Healthy; visible completion verified | — |
+
+The analysis answered: “No market data provided; cannot assess HTF alignment, FVGs, liquidity pools, session levels, or sweeps.” This is a response to the test input, not a market prediction.
+
+One earlier verification run received a reply but failed the exact-string conversation-marker assertion; that reply's text was not captured. The verifier was changed to report failures independently and include diagnostic text. The same assertion then passed with a fresh marker against the **unchanged application deployment**. These checks demonstrate working requests and visible replies, not guaranteed correctness or exact-token reproduction for every model response. Timings are observations, not latency guarantees.
+
+The temporary diagnostic/verification deployments are removed after results are recorded. No temporary key was reused, no environment variables or server settings were changed, and no trading/order/history-write endpoints were invoked. The existing Worker was not redeployed; the web app's chat and analysis use the same-origin Vercel API.
+
+[Open Mira](https://aurum-quant-ai.vercel.app/chat.html) · [Release receipt](https://aurum-quant-ai.vercel.app/ai-release-check.json)

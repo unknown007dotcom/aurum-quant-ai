@@ -67,7 +67,7 @@ async function verifyChatHttp() {
   });
   assert.ok(
     followup.payload.content?.includes(marker),
-    `Expected the conversation code ${marker}; received ${JSON.stringify(followup.payload.content).slice(0, 400)} (first reply: ${JSON.stringify(first.payload.content).slice(0, 100)})`,
+    `Expected the conversation code ${marker}; received ${JSON.stringify(followup.payload.content ?? null).slice(0, 400)} (first reply: ${JSON.stringify(first.payload.content).slice(0, 100)})`,
   );
   emit({
     check: "saved-model-and-conversation-context",
