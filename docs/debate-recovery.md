@@ -61,4 +61,38 @@ npm run verify:live-ai -- --browser
 
 This makes real small AI requests through the public HTTP API and deployed Mira/terminal browsers. The terminal check uses synthetic chart fixtures for layout but **replaces the outgoing market prompt with a no-data connectivity request**; it is not a live-market accuracy test. Its history writes are intercepted locally, and all trading commands, settings writes and other unapproved API calls are blocked. It verifies actual displayed debate text and tab behavior as well as visible Mira replies. `AURUM_VERIFY_REPORT` records a sanitized receipt.
 
-Live release outcomes will be recorded below after the staged gate and post-deployment checks complete. Earlier live results above describe the pre-repair baseline, not a new deployment.
+## Gated release
+
+Application revision: `fdde143371b1a6080fdec6b6f48b246cff142509`.
+Production deployment: `dpl_8MRLQnfErxv6amsAvHJ4rDHPJU19`, **READY / PROMOTED**, with both existing cron schedules preserved.
+The canonical public release receipt confirms this revision at **2026-10-24 17:33:03.705 UTC**.
+
+| Genuine packaged-handler gate | Chat | Debate | Whole analysis-handler request |
+| --- | ---: | --- | ---: |
+| Staged build | 0.751 s | 3/3 perspectives, 2 models, 1.567 s | 7.847 s |
+| Production build | 2.217 s | 3/3 perspectives, 2 models, 2.650 s | 8.999 s |
+
+Both used GPT-OSS 20B and Nemotron 3.5 Bolt E4B for reviews and GPT-OSS 20B for the meaningful final analysis. Both final results were genuine AI output, Stay Flat, with N/A price fields. Production final synthesis took 5.572 s; the debate budget is not the complete response time. These are isolated timing observations, not guarantees or proof that every run is faster than the earlier request that produced no working debate.
+
+Staged checks invoked the packaged handlers with real provider requests; they are not public-HTTP/browser checks. The project's preview deployments retain their existing access protection. No protection settings were changed. The post-deployment public HTTP/browser results are recorded separately below.
+
+[Open the terminal](https://aurum-quant-ai.vercel.app/) · [Release receipt](https://aurum-quant-ai.vercel.app/ai-release-check.json)
+
+
+## Verified after deployment
+
+The completed public-HTTP and real-Chromium verifier checked the canonical production origin at approximately **17:34:59 UTC**. AI responses were genuine, not mocked.
+
+| Public production check | Result | Observed time |
+| --- | --- | ---: |
+| Default chat | Real GPT-OSS 20B answer | 3.983 s |
+| Historic saved model + conversation context | Recovered selection and correct fresh conversation marker | 1.157 s |
+| Fast analysis HTTP | Meaningful final answer; 3/3 reviews from 2 distinct models; no failed attempts | 7.498 s total, 1.689 s debate |
+| Mira browser | Actual visible reply; stale-history recovery; no page errors | 1.357 s |
+| Terminal browser | Actual displayed reviews, Success/Failed tabs, mobile bounds, Escape close; no page errors | 9.655 s including page load/UI checks; 2.672 s debate |
+
+Both terminal checks used GPT-OSS 20B and Nemotron 3.5 Bolt E4B for the council. Final analysis safely explained the absence of current market evidence, rather than returning formatting instructions or fictional price levels. The browser's chart fixture was synthetic and never submitted as live market evidence. One attempted history write was intercepted and not sent to the server. No orders, bot commands, settings updates or credential changes were performed.
+
+The 7.498-second HTTP result includes a working council, whereas the 7.514-second baseline had zero working reviews. These isolated samples are not a statistical speed comparison. The reliable performance improvement is bounded debate work, smaller fanout and avoiding recently failed participants; final-model latency still varies.
+
+The baseline-probe, staged-release and post-release-verification preview deployments were deleted after their results were recorded. The new production deployment and earlier production rollback deployments remain intact. No temporary credential was created or installed.

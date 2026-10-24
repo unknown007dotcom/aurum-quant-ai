@@ -1,5 +1,7 @@
 # AI response recovery — 24 October 2026
 
+> Follow-up: [Debate Council recovery](debate-recovery.md) restores the debate UI and bounded participant reviews, with 84 tests and post-deployment chat/debate browser verification. The results below document the earlier response-recovery release.
+
 ## Reproduced against the public production HTTP endpoints
 
 The NVIDIA health probe was healthy, so a successful health check alone was not enough to diagnose this report. An isolated verification build called the **actual production HTTP endpoints**, without a temporary API key or any trading commands.
