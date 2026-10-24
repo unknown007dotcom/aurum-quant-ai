@@ -10,6 +10,7 @@ import {
   createChat,
   restoreState,
   normalizeSettings,
+  reconcileModelKey,
   DEFAULT_SETTINGS,
   EXAMPLES,
   requestMessages,
@@ -324,23 +325,21 @@ test("client-supplied credentials, endpoints, and system prompts are ignored", a
   );
 });
 
-test("removed default model falls back while an explicitly removed model errors", async () => {
+test("removed default and saved model keys fall back with the actual model disclosed", async () => {
   const changed = { ...settings, defaultModelKey: "removed" };
   assert.equal(chatConfiguration(changed).defaultModelKey, "model-a");
   assert.equal(
     (await completeChat(request(), changed, {}, successfulFetch)).model,
     "test/instruct-model",
   );
-  await assert.rejects(
-    completeChat(
-      request({ modelKey: "removed" }),
-      settings,
-      {},
-      successfulFetch,
-    ),
-    (error) =>
-      error.status === 400 && /no longer available/.test(error.message),
+  const recovered = await completeChat(
+    request({ modelKey: "removed" }),
+    settings,
+    {},
+    successfulFetch,
   );
+  assert.equal(recovered.model, "test/instruct-model");
+  assert.equal(recovered.modelFallbackUsed, true);
 });
 
 test("no credentials produces a setup error, never a fabricated AI response", async () => {
@@ -578,4 +577,20 @@ test("unsafe or invalid stored artwork falls back to Mira's portrait", () => {
     alt: "Your custom chat artwork",
     isCustom: true,
   });
+});
+
+test("saved model choices follow the current catalog without erasing choices on network failures", () => {
+  const config = {
+    configured: true,
+    models: [{ key: "current-key", id: "provider/model" }],
+  };
+  assert.equal(reconcileModelKey("current-key", config), "current-key");
+  assert.equal(reconcileModelKey("provider/model", config), "current-key");
+  assert.equal(reconcileModelKey("deleted-key", config), "");
+  assert.equal(reconcileModelKey("", config), "");
+  assert.equal(
+    reconcileModelKey("saved-key", { configured: false, models: [] }),
+    "saved-key",
+  );
+  assert.equal(reconcileModelKey("saved-key", {}), "saved-key");
 });

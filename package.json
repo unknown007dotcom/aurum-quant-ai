@@ -9,7 +9,8 @@
     "check-build": "wrangler deploy --dry-run",
     "test:chat-layout": "node tests/chat-layout.browser.cjs",
     "build:vercel": "node tools/build-vercel.cjs",
-    "test:ai-ui": "node tests/ai-routing.browser.cjs"
+    "test:ai-ui": "node tests/ai-routing.browser.cjs",
+    "verify:live-ai": "node tools/verify-live-ai.cjs"
   },
   "dependencies": {
     "firebase": "^12.12.1",

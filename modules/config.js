@@ -49,7 +49,7 @@ export const APP_CONFIG = {
   defaultModels: [
     {
       key: "gpt-oss-default",
-      id: "openai/gpt-oss-120b",
+      id: "openai/gpt-oss-20b",
       label: "Main Summary Model",
       apiKey: "",
       baseUrl: "https://integrate.api.nvidia.com/v1",

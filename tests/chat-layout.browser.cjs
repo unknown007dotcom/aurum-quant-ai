@@ -371,6 +371,80 @@ async function run() {
     assert.equal(restored.settings.visible, true);
     assert.equal(restored.settings.inert, false);
     assert.equal(await page.locator("#sidebarBackdrop").isVisible(), false);
+    // A deleted server model may not even appear in unavailableModels. Reopen
+    // history after startup as well: the old UI only repaired the active chat.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const recoverySeed = await page.evaluate(() => {
+      const key = "aurum-chat-workspace-v1";
+      const saved = JSON.parse(localStorage.getItem(key));
+      saved.defaults.modelKey = "gpt-oss-default";
+      saved.conversations[0].settings.modelKey = "deleted-custom-key";
+      saved.conversations.push({
+        id: "older-conversation",
+        title: "Earlier saved conversation",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        settings: { ...saved.defaults, modelKey: "removed-from-server" },
+        messages: [
+          {
+            id: "saved-question",
+            role: "user",
+            content: "My earlier question",
+            createdAt: Date.now(),
+          },
+        ],
+        error: "That model is no longer available.",
+        draft: "",
+      });
+      return saved;
+    });
+    // Seed the next document, after the current page's pagehide persistence.
+    await page.addInitScript((saved) => {
+      if (sessionStorage.getItem("recovery-test-seeded")) return;
+      sessionStorage.setItem("recovery-test-seeded", "1");
+      localStorage.setItem("aurum-chat-workspace-v1", JSON.stringify(saved));
+    }, recoverySeed);
+    const postCount = posts.length;
+    await page.reload();
+    await page.locator('#providerStatus[data-state="configured"]').waitFor();
+    const recovered = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("aurum-chat-workspace-v1")),
+    );
+    assert.equal(recovered.defaults.modelKey, "");
+    assert.ok(
+      recovered.conversations.every((chat) => chat.settings.modelKey === ""),
+    );
+    assert.deepEqual(
+      recovered.conversations[0].messages,
+      recoverySeed.conversations[0].messages,
+    );
+    assert.equal(
+      posts.length,
+      postCount,
+      "Catalog recovery must not resend messages automatically",
+    );
+    await page
+      .getByRole("button", {
+        name: "Open Earlier saved conversation",
+        exact: true,
+      })
+      .click();
+    assert.equal(await page.locator("#chatModel").inputValue(), "");
+    await page.locator("#retryButton").click();
+    await page
+      .getByText("The settings panel is working.", { exact: true })
+      .waitFor();
+    assert.equal(posts.at(-1).modelKey, "");
+    assert.equal(posts.at(-1).messages.at(-1).content, "My earlier question");
+    assert.equal(await page.locator("#chatError").isVisible(), false);
+    await page.locator("#chatModel").selectOption("test");
+    await page.reload();
+    await page.locator('#providerStatus[data-state="configured"]').waitFor();
+    assert.equal(await page.locator("#chatModel").inputValue(), "test");
+    console.log(
+      "PASS: Stale selections recover across saved history without losing messages; retry works and valid selections persist.",
+    );
+
     assert.deepEqual(pageErrors, []);
     console.log(
       "PASS: Drawer-to-docked resizing clears modal state; no browser errors.",

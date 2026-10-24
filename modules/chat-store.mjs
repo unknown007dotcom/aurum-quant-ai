@@ -90,6 +90,21 @@ export function normalizeSettings(value = {}) {
   };
 }
 
+// A browser preference is not a provider credential or an authoritative catalog.
+// Only reconcile after a successful configured catalog fetch; a network outage
+// must not erase a user's selection. An empty key follows the server default.
+export function reconcileModelKey(key, configuration = {}) {
+  if (!key || !configuration.configured || !configuration.models?.length)
+    return key || "";
+  const models = configuration.models;
+  return (
+    (
+      models.find((model) => model.key === key) ||
+      models.find((model) => model.id === key)
+    )?.key || ""
+  );
+}
+
 export function createChat(settings = DEFAULT_SETTINGS) {
   const now = Date.now();
   return {

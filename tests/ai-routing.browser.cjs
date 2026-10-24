@@ -211,8 +211,9 @@ const server = http.createServer(async (req, res) => {
     await page.goto(base);
     await page.waitForFunction(
       () =>
-        state.models.some((model) => model.id === "openai/gpt-oss-20b") &&
-        typeof window.syncAiBackendSettings === "function",
+        state.models.some(
+          (model) => model.key === "fast" && model.id === "openai/gpt-oss-20b",
+        ) && typeof window.syncAiBackendSettings === "function",
     );
     const endpoints = await page.evaluate(() => ({
       ai: apiUrl("/ai-decision"),
@@ -249,7 +250,10 @@ const server = http.createServer(async (req, res) => {
     assert.ok(!Object.hasOwn(calls[0].body, "apiKey"));
     assert.ok(!Object.hasOwn(calls[0].body, "baseUrl"));
     assert.ok(calls[0].body.prompt.length > 0);
-    assert.ok(calls[0].body.prompt.length < 90000, "Market prompt must leave room for server-side learning context.");
+    assert.ok(
+      calls[0].body.prompt.length < 90000,
+      "Market prompt must leave room for server-side learning context.",
+    );
     assert.deepEqual(prohibited, []);
     assert.deepEqual(errors, []);
     console.log(

@@ -55,7 +55,8 @@ async function verify(handler) {
   const modelKey = config.data.defaultModelKey;
   const started = Date.now();
   const chat = await invoke(handler, "chat", "POST", {
-    modelKey,
+    // Exercise a real historic browser preference as well as default discovery.
+    modelKey: "gpt-oss-default",
     messages: [
       { role: "user", content: "Reply with OK. This is a connectivity test." },
     ],
@@ -64,7 +65,9 @@ async function verify(handler) {
   if (
     chat.code !== 200 ||
     typeof chat.data?.content !== "string" ||
-    !chat.data.content.trim()
+    !chat.data.content.trim() ||
+    (!config.data.models.some((model) => model.key === "gpt-oss-default") &&
+      chat.data.modelFallbackUsed !== true)
   )
     throw new Error(
       `Live chat verification failed: ${chat.code} ${chat.data?.code || "no_reply"}`,
@@ -98,7 +101,13 @@ async function verify(handler) {
   const plan = JSON.parse(analysis.data.choices[0].message.content);
   if (
     plan.researcher?.direction !== "Stay Flat" ||
-    plan.trader?.entryZone !== "N/A"
+    plan.trader?.entryZone !== "N/A" ||
+    !/missing|insufficient|no (?:live )?market data|not (?:supplied|provided|available)/i.test(
+      plan.researcher?.summary || "",
+    ) ||
+    /explain the institutional narrative|you must explicitly reference/i.test(
+      plan.researcher?.summary || "",
+    )
   )
     throw new Error(
       "Diagnostic analysis did not safely handle missing market data.",
@@ -120,12 +129,13 @@ async function verify(handler) {
   );
   return {
     checkedAt: new Date().toISOString(),
-    chat: { ok: true, model: chat.data.model },
+    chat: { ok: true, model: chat.data.model, savedSelectionRecovered: true },
     analysis: {
       ok: true,
       model: analysis.data.model,
       aiUsed: true,
       fallbackUsed: false,
+      meaningfulAnswer: true,
     },
     tradesExecuted: false,
   };

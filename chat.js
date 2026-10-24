@@ -7,6 +7,7 @@ import {
   EXAMPLES,
   newId,
   normalizeSettings,
+  reconcileModelKey,
   createChat,
   restoreState,
   titleFromMessage,
@@ -14,7 +15,7 @@ import {
   historyGroup,
   formatMessage,
   exportConversation,
-} from "./modules/chat-store.mjs?v=2";
+} from "./modules/chat-store.mjs?v=3";
 import { CHAT_ASSISTANT, resolveChatArtwork } from "./modules/chat-persona.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -605,17 +606,20 @@ async function loadConfiguration() {
     configuration.models.forEach((model) =>
       $("chatModel").append(new Option(model.label, model.key)),
     );
-    if (
-      Array.isArray(data.unavailableModels) &&
-      data.unavailableModels.some(
-        (model) =>
-          model.key === current.settings.modelKey ||
-          model.id === current.settings.modelKey,
-      )
-    ) {
-      updateSettings({ modelKey: "" });
+    // Reconcile all history entries, not just the chat open during page load.
+    // Removed keys may no longer appear in the server's unavailableModels list.
+    const previousKey = current.settings.modelKey;
+    for (const options of [
+      state.defaults,
+      current.settings,
+      ...state.conversations.map((chat) => chat.settings),
+    ]) {
+      options.modelKey = reconcileModelKey(options.modelKey, configuration);
+    }
+    persist();
+    if (previousKey && previousKey !== current.settings.modelKey) {
       toast(
-        "Your previous model is no longer available. Switched to an active model.",
+        "Your saved model selection was updated to an available model. Your messages are unchanged.",
       );
     }
     setProviderStatus(

@@ -60,3 +60,13 @@ Cloudflare backend. Set a permanent `NVIDIA_API_KEY` in the server environment
 
 See [AI diagnostic findings](docs/ai-diagnostics.md) for the repaired failure modes
 and credential-rotation requirements.
+
+### Response recovery (24 October 2026)
+
+Saved model selections now recover across chat history without deleting messages.
+Analysis rejects copied template instructions and retries invalid output within a
+bounded deadline. See [the reproduced failures and repair](docs/ai-response-recovery.md).
+
+`npm run verify:live-ai -- --browser` is an **opt-in live** HTTP/browser check after
+deployment. It makes genuine provider requests, checks meaningful replies and
+conversation context, and does not place orders or change server settings.

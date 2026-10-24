@@ -69,8 +69,8 @@ let state = {
   models: [
     {
       key: "gpt-oss-default",
-      id: "openai/gpt-oss-120b",
-      label: "Main Summary Model (GPT-OSS-120B)",
+      id: "openai/gpt-oss-20b",
+      label: "Main Summary Model (GPT-OSS-20B)",
       apiKey: "",
       baseUrl: "https://integrate.api.nvidia.com/v1",
     }

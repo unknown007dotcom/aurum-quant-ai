@@ -141,6 +141,8 @@ test("unsupported task models never enter chat or debate pools", async () => {
     "nvidia/ai-synthetic-video-detector",
     "google/deplot",
     "nvidia/gliner-pii",
+    "nvidia/nemotron-parse",
+    "nvidia/nemotron-parse-2.0",
   ])
     assert.equal(isChatModel(id), false);
   const mock = provider([FAST, "baai/bge-m3", "nvidia/nv-embedqa"]);
@@ -435,4 +437,176 @@ test("tracked fallback settings contain no active NVIDIA credential", () => {
   );
   assert.doesNotMatch(file, /nvapi-[A-Za-z0-9_-]{20,}/);
   assert.equal(credentials(JSON.parse(file), {}).length, 0);
+});
+
+test("legacy and removed browser selections recover using only the server catalog", async () => {
+  for (const modelKey of [
+    "gpt-oss-default",
+    "deleted-custom-key",
+    "openai/gpt-oss-120b",
+  ]) {
+    const mock = provider([FAST]);
+    const result = await completeChat(
+      { modelKey, messages: [{ role: "user", content: "Hi Mira" }] },
+      settings,
+      {},
+      mock.fetch,
+    );
+    assert.equal(result.model, FAST);
+    assert.equal(result.modelFallbackUsed, true);
+    assert.equal(mock.calls.at(-1).body.model, FAST);
+  }
+});
+
+test("an explicit valid model key wins over a stale conflicting model ID", async () => {
+  const mock = provider();
+  const runtime = await discoverModels(settings, {}, mock.fetch);
+  assert.equal(selectModel(runtime, LARGE, FAST).model.id, LARGE);
+});
+
+const echoedTemplate = JSON.stringify({
+  researcher: {
+    summary:
+      "Explain the institutional narrative. You MUST explicitly reference HTF Alignment, FVGs, active Liquidity Pools, Session Levels, and Liquidity Sweeps in your overview. If Red-Team identifies a trap, prioritize it.",
+    direction: "Stay Flat",
+    riskNote: "Summarize the RED-TEAM CRITIC's strongest argument.",
+  },
+  trader: {
+    ...JSON.parse(plan).trader,
+    invalidation: "Specific trigger or structural failure point",
+  },
+  equations: {
+    review:
+      "Discuss Equation 1 (Momentum), Equation 2 (Volatility), Equation 3 (Max-Pain).",
+  },
+});
+
+test("analysis repairs a template echo once instead of accepting instructions as an answer", async () => {
+  let attempt = 0;
+  const mock = provider([FAST], () =>
+    answer(++attempt === 1 ? echoedTemplate : plan),
+  );
+  const result = await completeAnalysis(
+    { prompt: "No market data supplied." },
+    settings,
+    {},
+    mock.fetch,
+  );
+  assert.equal(attempt, 2);
+  assert.equal(result.aiUsed, true);
+  assert.equal(
+    JSON.parse(result.choices[0].message.content).researcher.summary,
+    JSON.parse(plan).researcher.summary,
+  );
+  const calls = mock.calls.filter((call) => call.body);
+  assert.deepEqual(calls[0].body.response_format, { type: "json_object" });
+  assert.match(
+    calls[1].body.messages.at(-1).content,
+    /previous.*invalid|previous.*template/i,
+  );
+  assert.ok(calls[1].body.max_tokens >= 4096);
+});
+
+test("repeated template echoes fail honestly after one bounded correction", async () => {
+  const mock = provider([FAST], () => answer(echoedTemplate));
+  await assert.rejects(
+    completeAnalysis({ prompt: "No market data." }, settings, {}, mock.fetch),
+    (error) => error.code === "invalid_analysis",
+  );
+  assert.equal(mock.calls.filter((call) => call.body).length, 2);
+});
+
+test("empty required analysis fields are not treated as a completed answer", async () => {
+  for (const path of [
+    ["researcher", "summary"],
+    ["researcher", "riskNote"],
+    ["trader", "invalidation"],
+    ["equations", "review"],
+  ]) {
+    const data = JSON.parse(plan);
+    data[path[0]][path[1]] = "";
+    const mock = provider([FAST], () => answer(JSON.stringify(data)));
+    await assert.rejects(
+      completeAnalysis({ prompt: "No market data." }, settings, {}, mock.fetch),
+      (error) => error.code === "invalid_analysis",
+    );
+  }
+});
+
+test("reasoning that exhausts the output budget gets one larger-budget retry, never exposed reasoning", async () => {
+  let attempt = 0;
+  const mock = provider([FAST], () =>
+    ++attempt === 1
+      ? Response.json({
+          choices: [
+            {
+              message: {
+                content: null,
+                reasoning_content: "private reasoning",
+              },
+              finish_reason: "length",
+            },
+          ],
+        })
+      : answer("Here is the actual answer."),
+  );
+  const result = await completeChat(
+    { messages: [{ role: "user", content: "Explain a concept" }] },
+    settings,
+    {},
+    mock.fetch,
+  );
+  assert.equal(attempt, 2);
+  assert.equal(result.content, "Here is the actual answer.");
+  assert.ok(mock.calls.at(-1).body.max_tokens >= 4096);
+  assert.ok(!JSON.stringify(result).includes("private reasoning"));
+});
+
+test("an invalid analysis candidate cannot prevent fallback to a valid model", async () => {
+  const other = "example/selected-instruct";
+  const mock = provider([other, FAST], (body) =>
+    answer(body.model === other ? echoedTemplate : plan),
+  );
+  const result = await completeAnalysis(
+    { prompt: "No market data.", selectedModelKey: other },
+    { globalNvidiaApiKey: "key" },
+    {},
+    mock.fetch,
+  );
+  assert.equal(result.model, FAST);
+  assert.equal(result.modelFallbackUsed, true);
+  assert.equal(result.responseRepaired, true);
+  assert.equal(mock.calls.filter((call) => call.body).length, 3);
+});
+
+test("correction never starts after the overall analysis deadline", async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const mock = provider([FAST], () => {
+    clock += 65001;
+    return answer(echoedTemplate);
+  });
+  await assert.rejects(
+    completeAnalysis({ prompt: "No market data." }, settings, {}, mock.fetch),
+    (error) => error.code === "timeout",
+  );
+  assert.equal(mock.calls.filter((call) => call.body).length, 1);
+});
+
+test("directional output without actual levels is not accepted as a completed plan", async () => {
+  const incomplete = JSON.parse(plan);
+  incomplete.researcher.summary =
+    "The supplied synthetic example shows a bullish break of structure.";
+  incomplete.researcher.direction = "Buy";
+  delete incomplete.trader.entryZone;
+  const mock = provider([FAST], () => answer(JSON.stringify(incomplete)));
+  await assert.rejects(
+    completeAnalysis(
+      { prompt: "Synthetic test only." },
+      settings,
+      {},
+      mock.fetch,
+    ),
+    (error) => error.code === "invalid_analysis",
+  );
 });
