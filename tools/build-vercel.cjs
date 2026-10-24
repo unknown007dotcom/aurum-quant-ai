@@ -112,6 +112,25 @@ async function verify(handler) {
     throw new Error(
       "Diagnostic analysis did not safely handle missing market data.",
     );
+  const reviews = analysis.data.debateResponses || [];
+  const distinct = new Set(reviews.map((review) => review.modelId)).size;
+  if (
+    analysis.data.debatePlanned !== 3 ||
+    !reviews.length ||
+    reviews.length !== analysis.data.debateSuccessful ||
+    distinct !== analysis.data.debateDistinctModels ||
+    reviews.some(
+      (review) =>
+        typeof review.output !== "string" ||
+        review.output.trim().split(/\s+/).length < 5 ||
+        ["buy", "sell"].includes(review.vote),
+    ) ||
+    !Number.isFinite(analysis.data.timings?.debateMs) ||
+    analysis.data.timings.debateMs > 9000
+  )
+    throw new Error(
+      "Live debate verification failed: genuine bounded reviews are required, not merely a catalog or a working final summary.",
+    );
   console.log(
     "[LIVE-AI] " +
       JSON.stringify({
@@ -122,6 +141,9 @@ async function verify(handler) {
         fallbackUsed: false,
         debateAttempted: analysis.data.debateAttempted,
         debateSuccessful: analysis.data.debateSuccessful,
+        debateDistinctModels: distinct,
+        debateModels: [...new Set(reviews.map((review) => review.modelId))],
+        timings: analysis.data.timings,
         direction: plan.researcher.direction,
         durationMs: Date.now() - analysisStarted,
         tradesExecuted: false,
@@ -129,6 +151,7 @@ async function verify(handler) {
   );
   return {
     checkedAt: new Date().toISOString(),
+    sourceRevision: process.env.AURUM_SOURCE_REVISION || null,
     chat: { ok: true, model: chat.data.model, savedSelectionRecovered: true },
     analysis: {
       ok: true,
@@ -136,6 +159,15 @@ async function verify(handler) {
       aiUsed: true,
       fallbackUsed: false,
       meaningfulAnswer: true,
+    },
+    debate: {
+      ok: true,
+      mode: "fast",
+      planned: analysis.data.debatePlanned,
+      completed: reviews.length,
+      distinctModels: distinct,
+      models: [...new Set(reviews.map((review) => review.modelId))],
+      timings: analysis.data.timings,
     },
     tradesExecuted: false,
   };

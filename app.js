@@ -65,6 +65,7 @@ let state = {
   botCooldownMinutes: 15,
   botPollIntervalSeconds: 60,
   optionsDataKey: "",
+  debateMode: "fast",
   selectedModelKey: "gpt-oss-default",
   models: [
     {
@@ -1438,6 +1439,7 @@ function fireAllLiquidityNotifications(events) {
 async function runAnalysis() {
     if (state.isRunning) return;
     state.isRunning = true;
+    let aiProgressTimer;
     toggleScanUI(true);
     dom.setStatus("Running bot preview on the latest market structure...");
 
@@ -1506,14 +1508,18 @@ async function runAnalysis() {
         renderFibonacciOteUI(mtfData);
 
         // --- Step 2: Consult AI arbiter ---
-        dom.setStatus("Consulting Arbiter Council for Consensus...");
+        const runDebateMode = state.debateMode || "fast";
+        const aiStartedAt = Date.now();
+        const progressLabel = runDebateMode === "off" ? "Preparing AI summary" : `Running ${runDebateMode} debate and AI summary`;
+        dom.setStatus(`${progressLabel}…`);
+        aiProgressTimer = setInterval(() => dom.setStatus(`${progressLabel} · ${Math.floor((Date.now() - aiStartedAt) / 1000)}s elapsed`), 1000);
         const prompt = buildAiPrompt(analysis, mtfData);
         await loadAiModelConfiguration().catch(() => null);
         const selectedModel = state.models.find(model => model.key === state.selectedModelKey) || state.models[0] || {};
 
         let aiRes, aiData;
         const controller = new AbortController();
-        const aiTimeoutMs = state.debateMode === "full" ? 200000 : state.debateMode === "deep" ? 140000 : 90000;
+        const aiTimeoutMs = runDebateMode === "full" ? 135000 : runDebateMode === "deep" ? 115000 : 90000;
         const timeoutId = setTimeout(() => controller.abort(), aiTimeoutMs);
         try {
             aiRes = await fetch(apiUrl(APP_CONFIG.aiChatPath), {
@@ -1525,7 +1531,7 @@ async function runAnalysis() {
                     label: selectedModel?.label,
                     models: state.models.map(({ key, id, label }) => ({ key, id, label })),
                     debateModels: state.debateModels.map(({ key, id, bias, isDebateParticipant }) => ({ key, id, bias, isDebateParticipant })),
-                    debateMode: state.debateMode || "fast",
+                    debateMode: runDebateMode,
                     temperature: state.temperature,
                     prompt
                 }),
@@ -1551,7 +1557,8 @@ async function runAnalysis() {
             const serverMsg = aiData?.message || aiData?.fallbackReason || "Check API keys in Settings.";
             const failReason = parseSpecificAiFailureReason(aiRes.status, serverMsg);
             dom.setStatus(`AI unavailable (${aiRes.status}): ${failReason}`);
-            const fallbackPayload = buildLocalAiFallback(analysis, failReason);
+            // Keep real participant reviews visible when final synthesis fails.
+            const fallbackPayload = { ...aiData, ...buildLocalAiFallback(analysis, failReason) };
             renderAiUI(fallbackPayload, analysis);
             syncHistory(analysis, fallbackPayload);
             refreshBotStatus().catch(() => {});
@@ -1573,6 +1580,7 @@ async function runAnalysis() {
         showAnalysisError("Unexpected Error", e.message || String(e));
         console.error("runAnalysis error:", e);
     } finally {
+        clearInterval(aiProgressTimer);
         state.isRunning = false;
         toggleScanUI(false);
     }
@@ -1627,7 +1635,8 @@ function buildLocalAiFallback(analysis, reason) {
                 content: JSON.stringify(payload)
             }
         }],
-        fallbackUsed: true
+        fallbackUsed: true,
+        aiUsed: false
     };
 }
 
@@ -1993,7 +2002,7 @@ function renderAiUI(ai, analysis) {
     if (dom.get("#decisionLabel")) dom.get("#decisionLabel").textContent = hasConflict ? "⚠ CONFLICT — Stay Flat" : normalizedDirection;
     if (dom.get("#riskLabel"))     dom.get("#riskLabel").textContent = isFlat ? "Flat" : "Active";
     if (dom.get("#aiBadge")) {
-        dom.get("#aiBadge").textContent = hasConflict ? "CONFLICT" : "COMPLETE";
+        dom.get("#aiBadge").textContent = ai.fallbackUsed ? "AI UNAVAILABLE" : hasConflict ? "CONFLICT" : "COMPLETE";
     }
 
     // ── 2. Model Interpretation panel — branches on Conflict vs Stay Flat vs Active
@@ -2078,6 +2087,7 @@ function renderAiUI(ai, analysis) {
     }
 
     state.lastAiResult = { data, ai, analysis, direction: normalizedDirection };
+    renderDebatePanel(ai);
 
     // ── 7. Scorecard panel
     const score = dom.get("#scorecardContent");
@@ -2090,7 +2100,7 @@ function renderAiUI(ai, analysis) {
             <div class="score-card"><p>Grade</p><strong style="color:${card.grade === 'Active' ? '#22c55e' : card.grade === 'Watch' ? '#f59e0b' : '#ef4444'}">${escapeHtml(card.grade)}</strong></div>
         `;
     }
-    if (dom.get("#scorecardBadge")) dom.get("#scorecardBadge").textContent = "VERIFIED";
+    if (dom.get("#scorecardBadge")) dom.get("#scorecardBadge").textContent = ai.fallbackUsed ? "RULE ENGINE" : "VERIFIED";
 }
 
 function normalizeScorecard(scorecard, analysis, isFlat) {
@@ -2154,99 +2164,9 @@ function parseSpecificAiFailureReason(status, message) {
         return "NVIDIA request timed out.";
     }
     if (status === 502 || text.includes("worker")) {
-        return "Cloudflare Worker timeout or gateway error.";
+        return message || "The AI provider could not complete this request.";
     }
     return message || `Server error ${status}`;
-}
-
-function showDebateCouncilModal() {
-    const lastResult = state.lastAiResult?.ai || {};
-    const debateResponses = lastResult.debateResponses || [];
-    const debateMetrics = lastResult.debateMetrics || [];
-    const debateConsensus = lastResult.debateConsensus || { buy: 0, sell: 0, wait: 0 };
-    const fallbackReason = lastResult.fallbackReason || "";
-
-    let modal = document.getElementById("debateCouncilModal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "debateCouncilModal";
-        modal.className = "modal-backdrop";
-        document.body.appendChild(modal);
-    }
-
-    let warningBanner = "";
-    if (fallbackReason === "Debate completed, but final synthesis failed.") {
-        warningBanner = `<div class="alert alert-warning" style="background:#451a03;border:1px solid #f59e0b;color:#fef3c7;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:0.85rem;">
-            ⚠️ <strong>Debate completed, but final synthesis failed.</strong> Individual debate participant responses are displayed below.
-        </div>`;
-    } else if (fallbackReason) {
-        warningBanner = `<div class="alert alert-info" style="background:#1e293b;border:1px solid #3b82f6;color:#93c5fd;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:0.85rem;">
-            ℹ️ <strong>Notice:</strong> ${escapeHtml(fallbackReason)}
-        </div>`;
-    }
-
-    let metricsHtml = "";
-    if (Array.isArray(debateMetrics) && debateMetrics.length > 0) {
-        metricsHtml = `<div style="margin-bottom:16px;">
-            <h5 style="margin:0 0 8px 0;font-size:0.9rem;color:var(--text-muted,#94a3b8);">Debate Model Status & Timings</h5>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:8px;">
-                ${debateMetrics.map(m => `
-                    <div style="background:var(--card-bg,#1e293b);padding:8px 12px;border-radius:6px;border:1px solid ${m.success ? '#22c55e44' : '#ef444444'};font-size:0.8rem;">
-                        <div style="font-weight:600;color:var(--text,#f8fafc);">${escapeHtml(m.modelLabel)}</div>
-                        <div style="color:var(--muted,#94a3b8);margin-top:2px;">
-                            Role: ${m.role} | ${m.success ? `<span style="color:#22c55e;">✓ ${m.durationMs}ms</span>` : `<span style="color:#ef4444;">✗ ${m.sanitizedError || 'Failed'}</span>`}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        </div>`;
-    }
-
-    let responsesHtml = "";
-    if (debateResponses.length > 0) {
-        responsesHtml = debateResponses.map(d => `
-            <div style="background:var(--card-bg,#1e293b);padding:12px;border-radius:8px;margin-bottom:10px;border:1px solid var(--border,#334155);">
-                <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                    <strong style="color:#38bdf8;">${escapeHtml(d.modelLabel || d.modelId)}</strong>
-                    <span style="font-size:0.75rem;padding:2px 6px;border-radius:4px;background:#334155;color:#f8fafc;">${escapeHtml(d.bias || "both").toUpperCase()}</span>
-                </div>
-                <div style="font-size:0.85rem;white-space:pre-wrap;color:#cbd5e1;line-height:1.4;">${escapeHtml(d.output || "No output")}</div>
-            </div>
-        `).join("");
-    } else {
-        responsesHtml = `<p style="color:var(--muted,#94a3b8);font-size:0.85rem;">No active debate participant responses recorded for this run.</p>`;
-    }
-
-    modal.innerHTML = `
-        <div class="modal-content" style="background:#0f172a;max-width:700px;width:90%;max-height:85vh;overflow-y:auto;padding:24px;border-radius:12px;border:1px solid #334155;color:#f8fafc;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h3 style="margin:0;font-size:1.2rem;">🏛️ Debate Council Analysis</h3>
-                <button onclick="document.getElementById('debateCouncilModal').style.display='none'" style="background:none;border:none;color:#94a3b8;font-size:1.5rem;cursor:pointer;">&times;</button>
-            </div>
-            ${warningBanner}
-            <div style="display:flex;gap:12px;margin-bottom:16px;">
-                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
-                    <div style="font-size:0.75rem;color:#94a3b8;">BUY VOTES</div>
-                    <div style="font-size:1.2rem;font-weight:bold;color:#22c55e;">${debateConsensus.buy || 0}</div>
-                </div>
-                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
-                    <div style="font-size:0.75rem;color:#94a3b8;">SELL VOTES</div>
-                    <div style="font-size:1.2rem;font-weight:bold;color:#ef4444;">${debateConsensus.sell || 0}</div>
-                </div>
-                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
-                    <div style="font-size:0.75rem;color:#94a3b8;">WAIT VOTES</div>
-                    <div style="font-size:1.2rem;font-weight:bold;color:#f59e0b;">${debateConsensus.wait || 0}</div>
-                </div>
-            </div>
-            ${metricsHtml}
-            <h4 style="margin:16px 0 8px 0;font-size:0.95rem;">Model Outputs</h4>
-            ${responsesHtml}
-            <div style="margin-top:20px;text-align:right;">
-                <button onclick="document.getElementById('debateCouncilModal').style.display='none'" style="background:#334155;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;">Close</button>
-            </div>
-        </div>
-    `;
-    modal.style.display = "block";
 }
 
 function normalizeGrade(value) {
@@ -3490,6 +3410,7 @@ function loadLocalSettings() {
                 });
             }
             if (parsed.debateModels && Array.isArray(parsed.debateModels)) state.debateModels = parsed.debateModels;
+            if (["off", "fast", "deep", "full"].includes(parsed.debateMode)) state.debateMode = parsed.debateMode;
             if (parsed.selectedModelKey) state.selectedModelKey = parsed.selectedModelKey;
             if (parsed.temperature !== undefined) state.temperature = parsed.temperature;
             if (parsed.candleCount) state.candleCount = parsed.candleCount;
@@ -3513,6 +3434,7 @@ function saveLocalSettings() {
             models: state.models.map(({ apiKey, ...model }) => model),
             debateModels: state.debateModels.map(({ apiKey, ...model }) => model),
             selectedModelKey: state.selectedModelKey,
+            debateMode: state.debateMode,
             temperature: state.temperature,
             candleCount: state.candleCount,
             botMode: state.botMode,
@@ -3666,6 +3588,15 @@ function initSettingsUI() {
     renderModelDropdowns();
     setupModelManager(false);
     setupModelManager(true);
+    initCustomSelect("debateModeSelect", [
+        { value: "fast", label: "Fast · 3 perspectives · ≤8s debate wait" },
+        { value: "deep", label: "Deep · 4 perspectives · ≤14s debate wait" },
+        { value: "full", label: "Full · 6 perspectives · ≤20s debate wait" },
+        { value: "off", label: "Summary only · no debate" }
+    ], state.debateMode || "fast", value => {
+        state.debateMode = value;
+        saveLocalSettings();
+    });
 
     const botModeOptions = [
         { value: "manual", label: "Manual Only" },
@@ -4094,88 +4025,148 @@ function showTrackerModal(stepName) {
   modal.setAttribute("aria-hidden", "false");
 }
 
-function setupDebateCouncilModal() {
-  const closeBtn = document.getElementById("closeDebateCouncilModal");
-  if (closeBtn) {
-    closeBtn.onclick = () => {
-      const modal = document.getElementById("debateCouncilModal");
-      if (modal) {
-        modal.style.display = "none";
-        modal.classList.remove("open");
-        modal.setAttribute("aria-hidden", "true");
+let debateActiveTab = "success";
+let debateReturnFocus = null;
+
+function debateEntries(ai = {}) {
+  return {
+    responses: Array.isArray(ai.debateResponses) ? ai.debateResponses : [],
+    failures: Array.isArray(ai.debateFailures) ? ai.debateFailures : (ai.debateMetrics || []).filter(entry => !entry.success)
+  };
+}
+
+function debateDuration(value) {
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms >= 0 ? ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s` : "time unavailable";
+}
+
+function renderDebatePanel(ai = {}) {
+  const { responses, failures } = debateEntries(ai);
+  const planned = ai.debatePlanned ?? ai.debateAttempted ?? responses.length;
+  const distinct = new Set(responses.map(entry => entry.modelId || entry.modelLabel)).size;
+  const modeLabel = ({ off: "Summary only", fast: "Fast", deep: "Deep", full: "Full" })[ai.debateMode] || "Debate";
+  const timing = ai.timings ? ` · debate ${debateDuration(ai.timings.debateMs)} · summary ${debateDuration(ai.timings.summaryMs)}` : "";
+  const summary = `${modeLabel} · ${responses.length}/${planned} perspectives · ${distinct} distinct model${distinct === 1 ? "" : "s"}${timing}`;
+  const votes = { buy: 0, sell: 0, wait: 0, unclassified: 0 };
+  responses.forEach(entry => votes[["buy", "sell", "wait"].includes(entry.vote) ? entry.vote : "unclassified"]++);
+  let notice = ai.debateNotice || (responses.length ? "Review each model's evidence; role counts are not independent model votes." : "No debate reviews returned. Choose a debate mode in Settings and run Analyze Market again.");
+  if (votes.unclassified) notice += ` ${votes.unclassified} review(s) had no explicit verdict and were not counted as votes.`;
+  if (failures.length) notice += ` ${failures.length} failed/skipped attempt(s); see details.`;
+  const panel = document.getElementById("consensusPanel");
+  if (panel) panel.style.display = "block";
+  const write = (id, text) => { const element = document.getElementById(id); if (element) element.textContent = text; };
+  write("debateRunSummary", summary);
+  write("debateModalSummary", `${summary}. ${notice}`);
+  write("debateRunNotice", notice);
+  write("debateBuyVotes", votes.buy);
+  write("debateSellVotes", votes.sell);
+  write("debateWaitVotes", votes.wait);
+  write("summaryDebateCount", `${responses.length}/${planned}`);
+  if (document.getElementById("debateCouncilModal")?.getAttribute("aria-hidden") === "false") renderDebateTab(debateActiveTab);
+}
+
+function renderDebateTab(tab) {
+  debateActiveTab = tab;
+  const ai = state.lastAiResult?.ai || {};
+  const { responses, failures } = debateEntries(ai);
+  const failedTab = tab === "failed";
+  for (const [id, selected, label] of [
+    ["tabDebateSuccess", !failedTab, `Success (${responses.length})`],
+    ["tabDebateFailed", failedTab, `Failed / skipped (${failures.length})`]
+  ]) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.textContent = label;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  const list = document.getElementById("debateModelList");
+  const name = document.getElementById("debateActiveModelName");
+  const output = document.getElementById("debateModelOutputContainer");
+  if (!list || !name || !output) return;
+  list.replaceChildren();
+  const entries = failedTab ? failures : responses;
+  name.textContent = failedTab ? "Failed / skipped attempts" : "Successful reviews";
+  output.textContent = failedTab ? "No failed or skipped attempts for this run." : ai.debateNotice || "No successful reviews yet. Run Analyze Market with debate enabled. Final analysis can still succeed when debate participants fail.";
+  entries.forEach((entry, index) => {
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "debate-model-item";
+    button.setAttribute("aria-pressed", "false");
+    const modelName = document.createElement("span");
+    modelName.className = "debate-model-name";
+    modelName.textContent = entry.modelLabel || entry.modelId || "Unnamed participant";
+    const role = ["bullish", "bearish", "redteam", "both"].includes(entry.bias || entry.role) ? entry.bias || entry.role : "both";
+    const badge = document.createElement("span");
+    badge.className = `debate-model-badge ${role}`;
+    badge.textContent = role === "both" ? "BALANCED" : role.toUpperCase();
+    const meta = document.createElement("span");
+    meta.className = "debate-model-meta";
+    meta.textContent = `${failedTab ? entry.skipped ? "Skipped" : `Failed (${entry.statusCode || entry.code || "error"})` : entry.modelFallbackUsed ? "Backup model used" : "Completed"} · ${debateDuration(entry.durationMs)}`;
+    button.append(modelName, badge, meta);
+    button.onclick = () => {
+      for (const item of list.querySelectorAll("button")) {
+        item.classList.toggle("active", item === button);
+        item.setAttribute("aria-pressed", String(item === button));
       }
+      name.textContent = `${entry.modelId || entry.modelLabel || "Participant"} · ${badge.textContent}`;
+      // Provider output and errors are always text, never executable HTML.
+      output.textContent = failedTab
+        ? `${meta.textContent}\n\n${entry.sanitizedError || entry.message || "This participant returned no usable review."}`
+        : `${entry.output || "No review text returned."}${entry.modelFallbackUsed ? `\n\nBackup used: ${entry.modelId}. Originally requested: ${entry.requestedModelId || "another model"}. See Failed / skipped for earlier attempts.` : ""}`;
     };
-  }
-  const viewDetailsBtn = document.getElementById("viewDebateDetailsButton");
-  if (viewDetailsBtn) {
-    viewDetailsBtn.onclick = () => showDebateCouncilModal();
-  }
+    li.appendChild(button);
+    list.appendChild(li);
+    if (index === 0) button.click();
+  });
+}
+
+function setupDebateCouncilModal() {
+  const modal = document.getElementById("debateCouncilModal");
+  if (!modal) return;
+  const close = () => {
+    modal.style.display = "none";
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    debateReturnFocus?.focus();
+  };
+  document.getElementById("closeDebateCouncilModal")?.addEventListener("click", close);
+  document.getElementById("viewDebateDetailsButton")?.addEventListener("click", showDebateCouncilModal);
+  document.getElementById("tabDebateSuccess")?.addEventListener("click", () => renderDebateTab("success"));
+  document.getElementById("tabDebateFailed")?.addEventListener("click", () => renderDebateTab("failed"));
+  modal.addEventListener("click", event => { if (event.target === modal) close(); });
+  modal.addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); close(); }
+    if (event.target.matches("[role=tab]") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const target = event.key === "Home" ? "tabDebateSuccess" : event.key === "End" ? "tabDebateFailed" : event.target.id === "tabDebateSuccess" ? "tabDebateFailed" : "tabDebateSuccess";
+      const button = document.getElementById(target);
+      button?.click();
+      button?.focus();
+    }
+    if (event.key === "Tab") {
+      const focusable = [...modal.querySelectorAll("button:not([disabled]):not([tabindex='-1'])")].filter(element => element.getClientRects().length);
+      const first = focusable[0], last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  });
 }
 
 function showDebateCouncilModal() {
   const modal = document.getElementById("debateCouncilModal");
-  const modelList = document.getElementById("debateModelList");
-  const activeModelName = document.getElementById("debateActiveModelName");
-  const outputContainer = document.getElementById("debateModelOutputContainer");
   if (!modal) return;
-
-  // Reset display
-  if (modelList) modelList.innerHTML = "";
-  if (activeModelName) activeModelName.textContent = "Select a model to view output";
-  if (outputContainer) outputContainer.textContent = "Choose a model from the left sidebar to display its response commentary here.";
-
-  const aiResult = state.lastAiResult || {};
-  const debateResponses = aiResult.ai?.debateResponses || [];
-
-  if (!debateResponses.length) {
-    if (outputContainer) {
-      if (aiResult.ai?.debateUsed === false) {
-        outputContainer.textContent = "No debate was conducted. Either only a single summary model was selected, or all debate models timed out/failed. Run a bot preview first with debate models enabled in Settings.";
-      } else {
-        outputContainer.textContent = "No active debate data found. Please run a bot preview first to execute the Arbiter Debate Council.";
-      }
-    }
-  } else {
-    // Populate list of models
-    debateResponses.forEach((resp, idx) => {
-      const li = document.createElement("li");
-      const biasLabel = String(resp.bias || "balanced").toUpperCase();
-      li.innerHTML = `
-        <button class="debate-model-item" data-index="${idx}">
-          <span class="debate-model-name">${escapeHtml(resp.modelLabel || resp.modelId)}</span>
-          <span class="debate-model-badge ${escapeHtml(resp.bias || 'balanced')}">${escapeHtml(biasLabel)}</span>
-        </button>
-      `;
-      modelList.appendChild(li);
-    });
-
-    // Add click listeners to items
-    const items = modelList.querySelectorAll(".debate-model-item");
-    items.forEach(btn => {
-      btn.onclick = () => {
-        // Toggle active class
-        items.forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-
-        const index = parseInt(btn.getAttribute("data-index"), 10);
-        const resp = debateResponses[index];
-        if (resp) {
-          activeModelName.textContent = `${resp.modelLabel || resp.modelId} (${String(resp.bias || 'balanced').toUpperCase()})`;
-          outputContainer.textContent = resp.output || "Empty response from model.";
-        }
-      };
-    });
-
-    // Automatically click first model in the list
-    if (items.length > 0) {
-      items[0].click();
-    }
-  }
-
-  // Toggle open
+  debateReturnFocus = document.activeElement;
+  const ai = state.lastAiResult?.ai || {};
+  renderDebatePanel(ai);
+  const { responses, failures } = debateEntries(ai);
+  renderDebateTab(!responses.length && failures.length ? "failed" : "success");
   modal.style.display = "grid";
   modal.classList.add("open");
   modal.setAttribute("aria-hidden", "false");
+  document.getElementById("closeDebateCouncilModal")?.focus();
 }
 
 // --- ICT Optimal Trade Entry (OTE) Fibonacci & Swing Deep-Dive Module ---

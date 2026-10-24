@@ -323,7 +323,7 @@ test("analysis makes real model requests without a separate reject-all smoke tes
 test("failed debate participants do not prevent a genuine final AI analysis", async () => {
   const other = "example/debate-instruct";
   const mock = provider([FAST, other], (body) =>
-    body.model === other ? Response.json({}, { status: 410 }) : answer(plan),
+    body.response_format ? answer(plan) : Response.json({}, { status: 410 }),
   );
   const result = await completeAnalysis(
     { prompt: "No market data." },
@@ -338,8 +338,10 @@ test("failed debate participants do not prevent a genuine final AI analysis", as
   );
   assert.equal(result.aiUsed, true);
   assert.equal(result.fallbackUsed, false);
-  assert.equal(result.debateAttempted, 1);
+  assert.equal(result.debateAttempted, 3);
   assert.equal(result.debateSuccessful, 0);
+  assert.equal(result.debateResponses.length, 0);
+  assert.ok(result.debateMetrics.every(entry => !entry.success));
   assert.equal(result.debateMetrics[0].statusCode, 410);
   assert.equal(result.model, FAST);
 });

@@ -133,6 +133,18 @@ const server = http.createServer(async (req, res) => {
         { key: "large", id: LARGE, label: "GPT-OSS 120B" },
       ],
     };
+    const successfulAnalysis = {
+      model: LARGE,
+      aiUsed: true,
+      fallbackUsed: false,
+      choices: [{ message: { content: JSON.stringify(plan) } }],
+      debateUsed: false,
+      debateAttempted: 0,
+      debateSuccessful: 0,
+    };
+    let responsePayload = successfulAnalysis;
+    let responseStatus = 200;
+    let responseDelay = 0;
     const json = (route, payload) => route.fulfill({ json: payload });
     await context.route("**/*", async (route) => {
       const request = route.request();
@@ -140,19 +152,22 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === "/api/chat") return json(route, config);
       if (url.pathname === "/api/ai-decision") {
         calls.push({ url: request.url(), body: request.postDataJSON() });
-        return json(route, {
-          model: LARGE,
-          aiUsed: true,
-          fallbackUsed: false,
-          choices: [{ message: { content: JSON.stringify(plan) } }],
-          debateUsed: false,
-          debateAttempted: 0,
-          debateSuccessful: 0,
+        if (responseDelay)
+          await new Promise((resolve) => setTimeout(resolve, responseDelay));
+        return route.fulfill({
+          status: responseStatus,
+          json: {
+            ...responsePayload,
+            debateMode: request.postDataJSON().debateMode,
+          },
         });
       }
-      if (url.pathname === "/api/settings" || url.pathname === "/settings")
+      if (url.pathname === "/api/settings" || url.pathname === "/settings") {
+        if (request.method() !== "GET")
+          prohibited.push({ method: request.method(), path: url.pathname });
         return json(route, {
           isAdmin: false,
+          isBasic: true,
           settings: {
             nvidiaModels: [
               { key: "legacy", id: RETIRED, label: "Retired model" },
@@ -162,6 +177,7 @@ const server = http.createServer(async (req, res) => {
             botEnabled: false,
           },
         });
+      }
       if (url.hostname.endsWith("workers.dev")) {
         if (request.method() !== "GET" && url.pathname !== "/history-log")
           prohibited.push({ method: request.method(), path: url.pathname });
@@ -215,6 +231,10 @@ const server = http.createServer(async (req, res) => {
           (model) => model.key === "fast" && model.id === "openai/gpt-oss-20b",
         ) && typeof window.syncAiBackendSettings === "function",
     );
+    // Wait for the page's real automatic analysis, then measure an explicit
+    // user run. No arbitrary sleep racing the 500ms initialization timer.
+    await page.waitForFunction(() => state.lastAiResult && !state.isRunning);
+    calls.length = 0;
     const endpoints = await page.evaluate(() => ({
       ai: apiUrl("/ai-decision"),
       market: apiUrl("/market-mtf"),
@@ -254,8 +274,253 @@ const server = http.createServer(async (req, res) => {
       calls[0].body.prompt.length < 90000,
       "Market prompt must leave room for server-side learning context.",
     );
+    assert.equal(calls[0].body.debateMode, "fast");
     assert.deepEqual(prohibited, []);
     assert.deepEqual(errors, []);
+
+    const partialCouncil = {
+      ...successfulAnalysis,
+      debateUsed: true,
+      debatePlanned: 3,
+      debateAttempted: 2,
+      debateSuccessful: 2,
+      debateNotice:
+        "Two completed perspectives, one skipped role. Review evidence, not just vote counts.",
+      timings: { debateMs: 1200, summaryMs: 2100, totalMs: 3300 },
+      debateResponses: [
+        {
+          participantId: "role-1",
+          modelId: FAST,
+          modelLabel: '<img src=x onerror="window.debateInjected=true">',
+          bias: "bullish",
+          output:
+            "Market data is missing. Verdict: WAIT. <script>window.debateInjected=true</script>",
+          vote: "wait",
+          durationMs: 500,
+          modelFallbackUsed: true,
+          requestedModelId: RETIRED,
+        },
+        {
+          participantId: "role-2",
+          modelId: LARGE,
+          modelLabel: "Larger reviewer",
+          bias: "bearish",
+          output:
+            "Bullish and bearish signals both need confirmation. No explicit vote.",
+          vote: null,
+          durationMs: 1200,
+        },
+      ],
+      debateFailures: [
+        {
+          participantId: "role-1",
+          modelId: RETIRED,
+          modelLabel: "Unavailable model",
+          role: "bullish",
+          statusCode: 404,
+          code: "model_unavailable",
+          sanitizedError: "The requested model was removed.",
+          durationMs: 52,
+        },
+        {
+          participantId: "role-3",
+          modelId: RETIRED,
+          modelLabel: "Skipped reviewer",
+          role: "redteam",
+          skipped: true,
+          code: "budget",
+          statusCode: 504,
+          sanitizedError: "Skipped to preserve the final-answer budget.",
+          durationMs: 0,
+        },
+      ],
+    };
+    responsePayload = partialCouncil;
+    await page.evaluate(() => runAnalysis());
+    assert.ok(await page.locator("#consensusPanel").isVisible());
+    assert.match(
+      await page.locator("#debateRunSummary").innerText(),
+      /2\/3 perspectives · 2 distinct models · debate 1.2s/,
+    );
+    assert.equal(await page.locator("#debateWaitVotes").innerText(), "1");
+    assert.equal(await page.locator("#debateBuyVotes").innerText(), "0");
+    assert.match(
+      await page.locator("#debateRunNotice").innerText(),
+      /no explicit verdict/,
+    );
+    await page.locator("#viewDebateDetailsButton").click();
+    assert.equal(
+      await page.locator("#debateCouncilModal").getAttribute("aria-hidden"),
+      "false",
+    );
+    assert.equal(await page.locator("#debateModelList button").count(), 2);
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /Backup used:/,
+    );
+    assert.equal(await page.locator("#debateModelList img").count(), 0);
+    assert.equal(
+      await page.locator("#debateModelOutputContainer script").count(),
+      0,
+    );
+    assert.ok(!(await page.evaluate(() => window.debateInjected)));
+    await page.locator("#tabDebateFailed").click();
+    assert.equal(
+      await page.locator("#tabDebateFailed").getAttribute("aria-selected"),
+      "true",
+    );
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /404[\s\S]*removed/,
+    );
+    await page.locator("#debateModelList button").nth(1).click();
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /Skipped[\s\S]*final-answer budget/,
+    );
+    await page.locator("#tabDebateFailed").focus();
+    await page.keyboard.press("ArrowLeft");
+    assert.equal(
+      await page.locator("#tabDebateSuccess").getAttribute("aria-selected"),
+      "true",
+    );
+    if (process.env.AURUM_TEST_DEBATE_SCREENSHOTS)
+      await page.screenshot({ path: "scratch/debate-desktop.png" });
+    await page.keyboard.press("Escape");
+    assert.equal(
+      await page.locator("#debateCouncilModal").getAttribute("aria-hidden"),
+      "true",
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "viewDebateDetailsButton",
+    );
+
+    // All failed, empty success tab, then a deliberately disabled council.
+    responsePayload = {
+      ...partialCouncil,
+      debateResponses: [],
+      debateSuccessful: 0,
+      debateNotice:
+        "All debate requests failed. Final analysis remains available.",
+    };
+    await page.evaluate(() => runAnalysis());
+    assert.equal(await page.locator("#aiBadge").innerText(), "COMPLETE");
+    await page.locator("#viewDebateDetailsButton").click();
+    assert.equal(
+      await page.locator("#tabDebateFailed").getAttribute("aria-selected"),
+      "true",
+    );
+    await page.locator("#tabDebateSuccess").click();
+    assert.equal(await page.locator("#debateModelList button").count(), 0);
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /All debate requests failed/,
+    );
+    await page.locator("#closeDebateCouncilModal").click();
+    responsePayload = {
+      ...successfulAnalysis,
+      debateNotice: "Debate is off for this run.",
+    };
+    await page.evaluate(() => runAnalysis());
+    await page.locator("#viewDebateDetailsButton").click();
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /Debate is off/,
+    );
+    await page.locator("#tabDebateFailed").click();
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /No failed or skipped/,
+    );
+    await page.locator("#closeDebateCouncilModal").click();
+
+    // A failed summary does not erase genuine reviews or pretend to be AI.
+    responseStatus = 502;
+    responsePayload = {
+      ...partialCouncil,
+      choices: undefined,
+      aiUsed: false,
+      fallbackUsed: false,
+      code: "invalid_analysis",
+      message: "Final AI analysis failed.",
+    };
+    await page.evaluate(() => runAnalysis());
+    assert.equal(await page.locator("#aiBadge").innerText(), "AI UNAVAILABLE");
+    assert.equal(
+      await page.evaluate(() => state.lastAiResult.ai.debateResponses.length),
+      2,
+    );
+    assert.equal(await page.evaluate(() => state.isRunning), false);
+    responseStatus = 200;
+    responsePayload = partialCouncil;
+    responseDelay = 1500;
+    const pendingAnalysis = page.evaluate(() => runAnalysis());
+    await page.waitForFunction(() =>
+      document.getElementById("statusText").textContent.includes("elapsed"),
+    );
+    await pendingAnalysis;
+    responseDelay = 0;
+    assert.equal(await page.locator("#aiBadge").innerText(), "COMPLETE");
+    const finishedStatus = await page.locator("#statusText").innerText();
+    // Wait one timer tick specifically to detect a leaked progress interval.
+    await page.waitForTimeout(1100);
+    assert.equal(await page.locator("#statusText").innerText(), finishedStatus);
+
+    // Real controls, including mocked BASIC authorization; never save server
+    // settings or touch a trading command just to change a browser preference.
+    await page.locator("#settingsToggle").click();
+    await page.locator("#passwordInput").fill("test-only-password");
+    await page.locator("#submitPasswordButton").click();
+    await page.locator("#settingsPanel.open").waitFor();
+    assert.match(
+      await page.locator("#debateModeSelect .custom-select-button").innerText(),
+      /Fast/,
+    );
+    for (const mode of ["full", "off", "deep"]) {
+      await page.locator("#debateModeSelect .custom-select-button").click();
+      await page.locator(`#debateModeSelect [data-value="${mode}"]`).click();
+      assert.equal(await page.evaluate(() => state.debateMode), mode);
+      assert.equal(
+        await page.evaluate(
+          () =>
+            JSON.parse(localStorage.getItem("xauusd-analyzer-settings-v1"))
+              .debateMode,
+        ),
+        mode,
+      );
+    }
+    await page.locator("#closeSettings").click();
+    await page.evaluate(() => runAnalysis());
+    assert.equal(calls.at(-1).body.debateMode, "deep");
+    await page.reload();
+    await page.waitForFunction(() => state.lastAiResult && !state.isRunning);
+    assert.equal(await page.evaluate(() => state.debateMode), "deep");
+    assert.equal(calls.at(-1).body.debateMode, "deep");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator("#viewDebateDetailsButton").click();
+    assert.ok(await page.locator("#tabDebateSuccess").isVisible());
+    assert.ok(await page.locator("#tabDebateFailed").isVisible());
+    await page.locator("#tabDebateFailed").click();
+    await page.locator("#debateModelList button").nth(1).click();
+    assert.match(
+      await page.locator("#debateModelOutputContainer").innerText(),
+      /Skipped/,
+    );
+    const bounds = await page
+      .locator("#debateCouncilModal .password-card")
+      .boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 391);
+    assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 845);
+    if (process.env.AURUM_TEST_DEBATE_SCREENSHOTS)
+      await page.screenshot({ path: "scratch/debate-mobile.png" });
+    await page.keyboard.press("Escape");
+    assert.deepEqual(errors, []);
+    assert.deepEqual(prohibited, []);
+    console.log(
+      "PASS: Debate tabs, partial/all-failed/empty states, safe text rendering, summary failure recovery, progress timer, saved modes, keyboard and mobile layout.",
+    );
     console.log(
       "PASS: Terminal analysis uses the same-origin AI backend, preserves model IDs, and sends no credentials or trading commands.",
     );

@@ -56,6 +56,7 @@ module.exports = async function handler(req, res) {
       code: safe ? error.code : "internal_error",
       aiUsed: false,
       fallbackUsed: false,
+      ...(safe && error.debate ? error.debate : {}),
     });
   }
 };

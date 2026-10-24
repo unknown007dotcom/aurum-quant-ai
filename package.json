@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "publish": "wrangler publish",
-    "test": "node tests/analysis-engine.test.js && node --test tests/chat.test.mjs tests/nvidia-runtime.test.mjs",
+    "test": "node tests/analysis-engine.test.js && node --test tests/chat.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs",
     "check-build": "wrangler deploy --dry-run",
     "test:chat-layout": "node tests/chat-layout.browser.cjs",
     "build:vercel": "node tools/build-vercel.cjs",

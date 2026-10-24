@@ -104,6 +104,32 @@ async function verifyAnalysisHttp() {
     "timeHorizon",
   ])
     assert.equal(plan.trader[key], "N/A");
+  const reviews = analysis.payload.debateResponses;
+  assert.ok(
+    Array.isArray(reviews) && reviews.length > 0,
+    "A working final summary alone does not verify the debate",
+  );
+  assert.equal(analysis.payload.debatePlanned, 3);
+  assert.equal(analysis.payload.debateSuccessful, reviews.length);
+  assert.equal(
+    analysis.payload.debateDistinctModels,
+    new Set(reviews.map((review) => review.modelId)).size,
+  );
+  assert.ok(
+    reviews.every(
+      (review) =>
+        typeof review.output === "string" &&
+        review.output.trim().split(/\s+/).length >= 5,
+    ),
+  );
+  assert.ok(
+    reviews.every((review) => !["buy", "sell"].includes(review.vote)),
+    "No-data reviews must not propose a direction",
+  );
+  assert.ok(
+    analysis.payload.timings.debateMs <= 9000,
+    "Fast debate exceeded its phase budget plus scheduling tolerance",
+  );
   emit({
     check: "meaningful-structured-analysis",
     ok: true,
@@ -111,6 +137,13 @@ async function verifyAnalysisHttp() {
     aiUsed: true,
     fallbackUsed: false,
     direction: plan.researcher.direction,
+    debateCompleted: reviews.length,
+    debateDistinctModels: analysis.payload.debateDistinctModels,
+    debateModels: [...new Set(reviews.map((review) => review.modelId))],
+    debateTimings: analysis.payload.timings,
+    debateFailures: (analysis.payload.debateFailures || []).map(
+      ({ modelId, code, skipped }) => ({ modelId, code, skipped }),
+    ),
     summary: plan.researcher.summary.slice(0, 400),
     durationMs: analysis.durationMs,
   });
@@ -254,8 +287,13 @@ async function verifyBrowser() {
     ["http-chat", verifyChatHttp],
     ["http-analysis", verifyAnalysisHttp],
   ];
-  if (process.argv.includes("--browser"))
+  if (process.argv.includes("--browser")) {
     checks.push(["browser-chat", verifyBrowser]);
+    checks.push([
+      "browser-debate",
+      () => require("./verify-debate-browser.cjs")(ORIGIN, emit),
+    ]);
+  }
   for (const [check, run] of checks) {
     try {
       await run();
