@@ -162,6 +162,14 @@ async function verify(handler) {
       throw new Error(
         `Live market/chat verification failed: ${reply.code} ${reply.data?.code || "no_reply"}`,
       );
+    console.log(
+      "[LIVE-MARKET-ANSWER] " +
+        JSON.stringify({
+          marketStatus: reply.data.market?.status,
+          quoteTime: reply.data.market?.quote?.time,
+          replyExcerpt: reply.data.content?.slice(0, 900),
+        }),
+    );
     const market = assertMarketReply(reply.data);
     marketData = {
       ok: true,

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import {
   getMarketSnapshot,
   marketConfiguration,
@@ -570,4 +571,47 @@ test("malformed optional market metadata/configuration cannot crash an otherwise
     error: { code: { toString: null, valueOf: null } },
   };
   assert.equal(normalizeMarketEvidence(value).errorCode, "unavailable");
+});
+
+test("the release gate accepts truthful not-tradable wording instead of requiring a single spelling", async () => {
+  const assertMarketReply = createRequire(import.meta.url)(
+    "../tools/assert-market-reply.cjs",
+  );
+  const market = publicMarketEvidence(
+    await snapshot(
+      api({ quote: { status: "non-tradeable", tradeable: false } }),
+    ),
+  );
+  for (const phrase of [
+    "not tradeable",
+    "not tradable",
+    "non-tradeable",
+    "non-tradable",
+    "not **tradable**",
+    "non‑tradable",
+    "market closed",
+    "last-known quote",
+  ]) {
+    assert.doesNotThrow(() =>
+      assertMarketReply({
+        market,
+        content: `OANDA XAU/USD midpoint is 3995.81 USD. Status: ${phrase}.`,
+      }),
+    );
+  }
+});
+
+test("the release gate still rejects a stale quote described as live, missing disclosures and invented prices", async () => {
+  const assertMarketReply = createRequire(import.meta.url)(
+    "../tools/assert-market-reply.cjs",
+  );
+  const market = publicMarketEvidence(
+    await snapshot(api({ quote: { time: iso(NOW - 86400000) } })),
+  );
+  for (const content of [
+    "OANDA XAU/USD midpoint is 3995.81 USD. The quote is live.",
+    "OANDA XAU/USD midpoint is 3995.81 USD.",
+    "OANDA XAU/USD midpoint is 9876.54 USD. This is a stale quote.",
+  ])
+    assert.throws(() => assertMarketReply({ market, content }));
 });

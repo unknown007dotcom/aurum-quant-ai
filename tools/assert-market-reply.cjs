@@ -42,12 +42,22 @@ module.exports = function assertMarketReply(payload) {
     ),
     "The assistant did not use the actual supplied quote",
   );
-  if (market.status !== "live")
+  if (market.status !== "live") {
+    const plain = content
+      .replace(/[*`]/g, "")
+      .replace(/[\u2010-\u2015]/g, "-")
+      .replace(/\s+/g, " ");
     assert.match(
-      content,
-      /last|closed|stale|not.{0,15}live|non.?trad[ae]able/i,
+      plain,
+      /\b(?:last|closed|stale)\b|\bnot\b.{0,15}\b(?:live|trad(?:e)?able)\b|\bnon[- ]?trad(?:e)?able\b/i,
       "A closed/stale quote must not be presented as live",
     );
+    assert.doesNotMatch(
+      plain,
+      /\b(?:quote|price) is (?:currently )?live\b/i,
+      "A stale quote was explicitly called live",
+    );
+  }
   const evidence = JSON.stringify(market);
   assert.ok(
     !/apiKey|accountId|Authorization|Bearer |oandaApiToken|server-oanda-token/.test(

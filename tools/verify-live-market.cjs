@@ -16,6 +16,7 @@ const recordReply = (check, payload, started) => {
   emit({
     check,
     ok: true,
+    replyExcerpt: payload.content.slice(0, 600),
     model: payload.model,
     marketStatus: market.status,
     provider: market.provider,
