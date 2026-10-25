@@ -1,5 +1,7 @@
 # Debate Council recovery — 24 October 2026
 
+> Follow-up: [Read-only OANDA market context](chat-market-context.md) was added to Mira on 25 October. Statements below about Chat Mode having no live market feed describe this earlier debate-only release.
+
 ## Confirmed failure before this change
 
 A real Fast request to the production `/api/ai-decision` returned a genuine final analysis in **7.514 seconds**, but **0 of 4 debate participants** completed. Yi Large, Jamba 1.5 Large, SEA-LION 7B and DBRX all returned HTTP 404 despite appearing in the provider catalog. A catalog entry is not proof of a usable completion endpoint.

@@ -54,4 +54,41 @@ npm run verify:live-ai -- --browser
 
 The market verifier sends an actual gold question through the deployed API and UI without substituting a smaller no-data prompt. It checks the visible source card, closed/stale disclosures, mobile layout and persisted provenance. Browser/API traffic is limited to chat and static assets; it never issues an order, settings write, bot command or history write. `AURUM_VERIFY_ORIGIN` and `AURUM_VERIFY_REPORT` select the origin and sanitized report path.
 
-Live release outcomes will be recorded after the gated deployment and public verification complete. Implementation alone is not proof of successful provider access.
+## Gated production release
+
+- Feature implementation: `9fda74df19d6f4ab448fccc6306e90caaed85bf2`.
+- Released source, including verifier corrections: `64b568d3081a62824b344dfd8e87b2743b4ce28c`.
+- Production deployment: `dpl_8bm3ecuknVm7FvBrzbwWD82Ffj8H`, **READY / PROMOTED** on the existing project.
+- Canonical public receipt: **2026-10-25 14:06:15.247 UTC**, with market evidence in `ai-release-check.json`.
+
+The release gate used the existing **OANDA practice** connection and retrieved a genuine quote plus **32 completed M15 candles and 32 H1 candles**. OANDA marked the instrument non-tradeable. The last quote was bid **3995.18**, ask **3996.44**, midpoint **3995.81 USD/troy oz**, timestamped **2026-10-23 20:59:05.113 UTC**. These are last-known values, **not a current live price**.
+
+The actual GPT-OSS 20B reply included:
+
+> The market is **not tradeable** (closed), so this quote is not live.
+
+The market-chat request took **3.754 seconds** in that packaged-handler check. Ordinary chat also returned a real answer (0.898 s), and the unchanged analysis/debate gate passed (3/3 reviews across two models; 9.257 s total for its no-data analysis). Timings are observations, not guarantees; the full terminal market-analysis workload differs from that no-data test.
+
+A first candidate was blocked before promotion by the freshness-text assertion. Its reply text was not captured, so that exact wording remains unknown. A focused regression then showed that the assertion incorrectly rejected legitimate “not tradeable”/“non-tradable” variants. The verifier was corrected, now captures the actual reply, and continues to reject missing freshness disclosures, explicit stale-as-live claims and invented prices. The application code itself is unchanged between the first candidate and the successful release.
+
+## Public HTTP and browser verification
+
+The final verifier completed at approximately **2026-10-25 14:13:25 UTC** against `https://aurum-quant-ai.vercel.app`, without replacing the gold question or mocking the AI/OANDA response.
+
+| Check | Result | Observed duration |
+| --- | --- | ---: |
+| OANDA-backed chat HTTP | Genuine quote, M15/H1 candles and model answer; closed-market disclosure | 4.717 s |
+| OANDA-backed Mira browser | Actual answer/source card visible; exact quote timestamp; mobile layout and saved provenance passed | 3.753 s including reply/UI checks |
+| Ordinary chat HTTP | Genuine reply | 2.043 s |
+| Saved-model/context recovery | Genuine reply using the current fallback model and conversation marker | 1.433 s |
+| Existing structured-analysis HTTP gate | Genuine neutral no-data analysis; 3/3 debate perspectives across 2 models | 5.646 s |
+| Existing Mira browser recovery | Visible reply; stale history recovered; no page errors | 1.363 s |
+| Existing terminal browser gate | Genuine no-data AI response and debate UI; mobile/tab checks passed | 8.059 s including UI checks |
+
+The market browser answer used **3995.18 / 3996.44 / 3995.81** and explicitly said the market was **not tradeable (closed)**. Its provenance identified OANDA practice and the original **23 October 20:59:05.113 UTC** quote time. The lookup time was **25 October 14:12:55.610 UTC**; those two timestamps are not interchangeable. No current/live quote was fabricated during closure.
+
+Two preliminary verification builds had browser-runner setup/launch failures (not application failures). The public HTTP checks already passed; the complete deployed-browser run then succeeded with the build environment's compatible Chromium 138 binary. The broader local repeated-turn regression suite used Chromium 153. The production application was unchanged during these verifier setup corrections.
+
+No API keys, environment variables, server settings, account environment, bot controls or order-execution logic were modified. Browser verification sent no orders; the terminal smoke test intercepted its attempted history write. The existing Worker was not redeployed, and both existing cron schedules were retained.
+
+After recording results, the staged build, blocked production candidate and all temporary diagnostic/verification builds (including the two earlier response-investigation previews) were deleted. The verified production deployment and prior production rollback deployments remain intact.
