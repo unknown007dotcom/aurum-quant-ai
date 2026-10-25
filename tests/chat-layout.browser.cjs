@@ -29,6 +29,7 @@ const server = http.createServer(async (req, res) => {
         "favicon.svg",
         "modules/chat-store.mjs",
         "modules/chat-persona.mjs",
+        "modules/chat-market-evidence.mjs",
       ].some((name) => file === path.join(ROOT, name)) ||
       file.startsWith(path.join(ROOT, "assets") + path.sep);
     if (!allowed) {

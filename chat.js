@@ -15,7 +15,11 @@ import {
   historyGroup,
   formatMessage,
   exportConversation,
-} from "./modules/chat-store.mjs?v=3";
+} from "./modules/chat-store.mjs?v=4";
+import {
+  normalizeMarketEvidence,
+  marketEvidenceText,
+} from "./modules/chat-market-evidence.mjs";
 import { CHAT_ASSISTANT, resolveChatArtwork } from "./modules/chat-persona.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -199,6 +203,21 @@ function messageNode(message, index) {
   else body.textContent = message.content;
   main.append(meta, body);
   if (message.role === "assistant") {
+    const evidence = marketEvidenceText(message.market);
+    if (evidence) {
+      const card = element("aside", "market-evidence");
+      card.dataset.status = evidence.status;
+      card.setAttribute("aria-label", "Market data used for this answer");
+      card.append(
+        element("strong", "market-evidence-heading", evidence.heading),
+        element("span", "market-evidence-state", evidence.stateLabel),
+        element("p", "", evidence.detail),
+        element("small", "", evidence.timeLabel),
+      );
+      main.append(card);
+    }
+  }
+  if (message.role === "assistant") {
     const actions = element("div", "message-actions");
     const copy = element("button", "");
     copy.type = "button";
@@ -295,6 +314,14 @@ function renderSettings() {
   );
   $("creativityValue").value = options.temperature.toFixed(1);
   $("rememberContext").checked = options.context;
+  $("useMarketContext").checked = options.marketContext;
+  $("marketContextNote").textContent = !options.marketContext
+    ? "Market lookup is off for this conversation."
+    : configuration.marketData?.configured
+      ? "Read-only OANDA quotes + M15/H1 candles for gold questions. Each answer shows its data timestamp; closed/stale quotes are not live."
+      : configuration.marketData
+        ? "OANDA is not configured on this server. Ordinary chat remains available."
+        : "Ask about XAU/USD to request a timestamped, read-only market snapshot.";
   $("enterToSend").checked = options.enterToSend;
   $("sendHint").textContent = options.enterToSend
     ? "Enter to send"
@@ -446,6 +473,7 @@ async function requestReply(regenerate = false) {
         settings: {
           style: chat.settings.style,
           temperature: chat.settings.temperature,
+          marketContext: chat.settings.marketContext,
         },
         messages: requestMessages(previous, chat.settings.context),
       }),
@@ -470,6 +498,9 @@ async function requestReply(regenerate = false) {
       role: "assistant",
       content: payload.content.slice(0, 32000),
       model: typeof payload.model === "string" ? payload.model : "",
+      ...(normalizeMarketEvidence(payload.market)
+        ? { market: normalizeMarketEvidence(payload.market) }
+        : {}),
       createdAt: Date.now(),
     };
     if (regenerate && chat.messages.at(-1)?.role === "assistant")
@@ -601,6 +632,10 @@ async function loadConfiguration() {
       ),
       defaultModelKey: data.defaultModelKey || "",
       configured: data.configured === true,
+      marketData:
+        data.marketData && typeof data.marketData === "object"
+          ? { configured: data.marketData.configured === true }
+          : null,
     };
     $("chatModel").replaceChildren(new Option("Default model", ""));
     configuration.models.forEach((model) =>
@@ -842,6 +877,9 @@ document
   );
 $("creativity").addEventListener("input", (event) =>
   updateSettings({ temperature: Number(event.target.value) }),
+);
+$("useMarketContext").addEventListener("change", (event) =>
+  updateSettings({ marketContext: event.target.checked }),
 );
 $("rememberContext").addEventListener("change", (event) =>
   updateSettings({ context: event.target.checked }),

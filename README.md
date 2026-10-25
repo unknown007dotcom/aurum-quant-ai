@@ -38,7 +38,12 @@ the right. On smaller screens the sidebars become keyboard-accessible drawers.
 Your assistant **Mira** has a default anime portrait in the right panel.
 You can also upload a PNG, JPEG, or WebP and restore Mira's portrait at any time; it stays in this browser and is not sent
 to the AI. Chat requests use the existing NVIDIA configuration through the
-same-origin `/api/chat` endpoint, independently of trade execution.
+same-origin `/api/chat` endpoint, independently of trade execution. For gold questions,
+Mira can use server-fetched, read-only OANDA XAU/USD quotes and recent M15/H1
+candles. Answers show source timestamps; stale or closed-market quotes are not
+presented as live. The per-conversation market-context switch disables these
+lookups without changing the broker or trading settings.
+See [market-context integration](docs/chat-market-context.md).
 
 Run `npm test` for the analysis-engine and chat tests. See
 [Chat Mode implementation notes](docs/chat-mode.md) for API and storage details.

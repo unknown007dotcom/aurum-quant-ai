@@ -8,7 +8,7 @@ The page is a standalone, light-and-gold, three-column chat workspace inspired b
 
 - **Left:** new conversation, search, date-grouped saved chats, and clearly labeled example conversations. Examples are not saved as user history until continued.
 - **Center:** conversation starters, Markdown/text replies, a growing composer, copy, regenerate, retry, and stop controls. The conversation menu supports rename, Markdown export, and confirmed deletion.
-- **Right:** model selection, response length, creativity, conversation context, Enter-to-send, reset, and a custom image area. Settings are saved per conversation and are used as defaults for new chats.
+- **Right:** model selection, response length, creativity, read-only XAU/USD market context, conversation context, Enter-to-send, reset, and a custom image area. Settings are saved per conversation and are used as defaults for new chats.
 - **Responsive layout:** both sidebars stay docked at 900px and wider. From 641–899px, history becomes a drawer while settings stays visible on the right. At 640px and below, a labeled **Settings** button opens the right-hand drawer. Drawers support independent scrolling, backdrop dismissal, Escape, focus containment, and restored focus. Reduced-motion preferences are respected.
 
 ## Image area
@@ -32,9 +32,9 @@ Fonts and icons are served locally; the chat interface does not need a third-par
 
 The browser only calls same-origin `/api/chat`:
 
-- `GET`: `{ models: [{ key, id, label }], defaultModelKey, configured }`. “Configured” indicates a key is present, not a verified live connection.
-- `POST`: `{ modelKey, settings: { style, temperature }, messages: [{ role, content }] }`.
-- Successful reply: `{ content, model }`.
+- `GET`: `{ models: [{ key, id, label }], defaultModelKey, configured, marketData }`. “Configured” indicates a key is present, not a verified live connection.
+- `POST`: `{ modelKey, settings: { style, temperature, marketContext }, messages: [{ role, content }] }`.
+- Successful reply: `{ content, model, market? }`. `market` is safe quote provenance, not credentials or the full candle dataset.
 - Failure: a suitable HTTP status with `{ message }`.
 
 `api-handlers/chat.js`, `/api/ai-decision`, and `/api/ai-health` now use the same server-side configuration and `lib/nvidia-runtime.mjs`. They no longer depend on a separately deployed edge chat route. A permanent `NVIDIA_API_KEY` takes precedence over saved keys; otherwise protected server settings provide the credentials.
@@ -43,7 +43,7 @@ Model discovery checks NVIDIA's current catalog, filters non-chat tasks, and sto
 
 The Cloudflare source uses the shared AI services too, but changing the Vercel deployment does not automatically update an existing Worker. Browser AI requests stay on the verified Vercel path; market-data and trading endpoints remain separate.
 
-The conversational system prompt is separate from the trade-decision engine. It provides no live market-data feed or execution tools and explicitly requires hypothetical examples to be labeled. Chat Mode never starts, stops, or places trades.
+The conversational system prompt is separate from the trade-decision engine. Read-only OANDA context is now available for gold questions and relevant follow-ups; it is not a streaming feed. Hypothetical examples must still be labeled. Chat Mode never starts, stops, modifies, closes or places trades, and it cannot access balances or account history. See [the market-context integration](chat-market-context.md) for freshness, permissions and verification details.
 
 ## Verification
 
@@ -53,6 +53,7 @@ npm run check-build      # Cloudflare bundle validation, no deployment
 npx playwright install chromium # One-time setup for browser regression tests
 npm run test:chat-layout # Docking, mobile drawers, resize, and interaction checks
 npm run test:ai-ui       # Real terminal controller, mocked HTTP, no trading
+npm run test:chat-market # Market provenance, failure recovery, persistence and mobile UI
 node server.js           # Manual/browser verification at /chat.html
 ```
 

@@ -21,8 +21,8 @@
       type="font/woff2"
       crossorigin
     />
-    <link rel="stylesheet" href="./chat.css?v=5" />
-    <script type="module" src="./chat.js?v=5"></script>
+    <link rel="stylesheet" href="./chat.css?v=6" />
+    <script type="module" src="./chat.js?v=6"></script>
   </head>
   <body>
     <a class="skip-link" href="#messageInput">Skip to chat</a>
@@ -582,6 +582,22 @@
               </div>
             </div>
             <div class="settings-divider"></div>
+            <label class="toggle-setting" for="useMarketContext"
+              ><span
+                ><strong>XAU/USD market context</strong
+                ><small
+                  >Read-only OANDA · automatic for gold questions</small
+                ></span
+              ><input
+                type="checkbox"
+                role="switch"
+                id="useMarketContext"
+                checked /><span class="toggle-track" aria-hidden="true"></span
+            ></label>
+            <p class="market-context-note" id="marketContextNote">
+              Quotes and recent candles, with source timestamps. No order
+              execution.
+            </p>
             <label class="toggle-setting" for="rememberContext"
               ><span
                 ><strong>Conversation context</strong

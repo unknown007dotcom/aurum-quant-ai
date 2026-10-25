@@ -2708,3 +2708,32 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Read-only provenance belongs to an answer, never an execution control. */
+.market-context-note {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.market-evidence {
+  min-width: 0;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sage-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.market-evidence-heading, .market-evidence-state, .market-evidence small {
+  display: block;
+}
+.market-evidence-heading { font-weight: 600; }
+.market-evidence-state { color: var(--muted); }
+.market-evidence p { margin: 6px 0; }
+.market-evidence small { color: var(--muted); font-size: 10px; }
+.market-evidence[data-status="stale"],
+.market-evidence[data-status="market_closed"],
+.market-evidence[data-status="unavailable"] { background: var(--gold-soft); border-color: var(--gold-border); }

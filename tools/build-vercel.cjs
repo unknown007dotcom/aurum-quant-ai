@@ -149,7 +149,38 @@ async function verify(handler) {
         tradesExecuted: false,
       }),
   );
+  let marketData;
+  if (process.env.AURUM_VERIFY_LIVE_MARKET === "1") {
+    const assertMarketReply = require("./assert-market-reply.cjs");
+    const started = Date.now();
+    const reply = await invoke(handler, "chat", "POST", {
+      modelKey,
+      messages: [{ role: "user", content: assertMarketReply.QUESTION }],
+      settings: { style: "concise", temperature: 0, marketContext: true },
+    });
+    if (reply.code !== 200)
+      throw new Error(
+        `Live market/chat verification failed: ${reply.code} ${reply.data?.code || "no_reply"}`,
+      );
+    const market = assertMarketReply(reply.data);
+    marketData = {
+      ok: true,
+      provider: market.provider,
+      instrument: market.instrument,
+      readOnly: true,
+      environment: market.environment,
+      marketStatus: market.status,
+      quoteTime: market.quote.time,
+      checkedAt: market.checkedAt,
+      mid: market.quote.mid,
+      candles: market.candles,
+      model: reply.data.model,
+      durationMs: Date.now() - started,
+    };
+    console.log("[LIVE-MARKET] " + JSON.stringify(marketData));
+  }
   return {
+    ...(marketData ? { marketData } : {}),
     checkedAt: new Date().toISOString(),
     sourceRevision: process.env.AURUM_SOURCE_REVISION || null,
     chat: { ok: true, model: chat.data.model, savedSelectionRecovered: true },
@@ -245,10 +276,12 @@ module.exports = (req, res) => {
         { handle: "filesystem" },
       ],
       overrides: Object.fromEntries(
-        ["chat-store.mjs", "chat-persona.mjs"].map((name) => [
-          `modules/${name}`,
-          { contentType: "application/javascript; charset=utf-8" },
-        ]),
+        ["chat-store.mjs", "chat-persona.mjs", "chat-market-evidence.mjs"].map(
+          (name) => [
+            `modules/${name}`,
+            { contentType: "application/javascript; charset=utf-8" },
+          ],
+        ),
       ),
     }),
   );
@@ -259,7 +292,10 @@ module.exports = (req, res) => {
   console.log(
     `Packaged ${fileList.size} runtime files (${warnings.size} optional dependency warnings); static output excludes private server data.`,
   );
-  if (process.env.AURUM_VERIFY_LIVE_AI === "1") {
+  if (
+    process.env.AURUM_VERIFY_LIVE_AI === "1" ||
+    process.env.AURUM_VERIFY_LIVE_MARKET === "1"
+  ) {
     const report = await verify(handler);
     await fs.writeFile(
       path.join(staticRoot, "ai-release-check.json"),

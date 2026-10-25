@@ -1,4 +1,8 @@
 import { CHAT_ASSISTANT } from "./chat-persona.mjs";
+import {
+  normalizeMarketEvidence,
+  marketEvidenceText,
+} from "./chat-market-evidence.mjs";
 
 // Chat has its own storage namespace; it never changes trading settings or history.
 export const STORAGE_KEY = "aurum-chat-workspace-v1";
@@ -11,6 +15,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   temperature: 0.5,
   context: true,
   enterToSend: true,
+  marketContext: true,
 });
 
 export const EXAMPLES = Object.freeze([
@@ -26,7 +31,7 @@ export const EXAMPLES = Object.freeze([
       {
         role: "assistant",
         content:
-          "Start with the bigger picture, then zoom in. You only need a few building blocks.\n\n**1. Follow the swings**\nHigher highs and higher lows suggest an uptrend. Lower highs and lower lows suggest a downtrend. If neither is clear, the market may be ranging.\n\n**2. Watch what changes**\nA break of structure can support the existing trend. A change of character is an early clue that the pattern might be shifting—not a guarantee of a reversal.\n\n**3. Keep the context**\nA small move on a five-minute chart can be noise inside a larger daily trend. Start with a higher timeframe, then look for confirmation.\n\nWould you like to walk through a hypothetical example? I don't have live prices in this chat.",
+          "Start with the bigger picture, then zoom in. You only need a few building blocks.\n\n**1. Follow the swings**\nHigher highs and higher lows suggest an uptrend. Lower highs and lower lows suggest a downtrend. If neither is clear, the market may be ranging.\n\n**2. Watch what changes**\nA break of structure can support the existing trend. A change of character is an early clue that the pattern might be shifting—not a guarantee of a reversal.\n\n**3. Keep the context**\nA small move on a five-minute chart can be noise inside a larger daily trend. Start with a higher timeframe, then look for confirmation.\n\nWould you like to walk through a hypothetical example? You can also ask for a timestamped, read-only OANDA gold snapshot.",
       },
     ],
   },
@@ -85,6 +90,10 @@ export function normalizeSettings(value = {}) {
         ? Math.min(1, Math.max(0, settings.temperature))
         : 0.5,
     context: typeof settings.context === "boolean" ? settings.context : true,
+    marketContext:
+      typeof settings.marketContext === "boolean"
+        ? settings.marketContext
+        : true,
     enterToSend:
       typeof settings.enterToSend === "boolean" ? settings.enterToSend : true,
   };
@@ -161,6 +170,10 @@ export function restoreState(value) {
           id:
             typeof message.id === "string" ? message.id.slice(0, 100) : newId(),
           role: message.role,
+          ...(message.role === "assistant" &&
+          normalizeMarketEvidence(message.market)
+            ? { market: normalizeMarketEvidence(message.market) }
+            : {}),
           content: message.content.slice(
             0,
             message.role === "user" ? 8000 : 32000,
@@ -268,5 +281,15 @@ export function formatMessage(text) {
 
 export function exportConversation(chat) {
   const date = new Date(chat.createdAt).toLocaleString();
-  return `# ${chat.title}\n\n${CHAT_ASSISTANT.name} · Aurum Quant AI · ${date}\n\n${chat.messages.map((message) => `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.content}`).join("\n\n---\n\n")}\n\n---\nAI can make mistakes. Think critically. Trade responsibly.\n`;
+  return `# ${chat.title}\n\n${CHAT_ASSISTANT.name} · Aurum Quant AI · ${date}\n\n${chat.messages
+    .map((message) => {
+      const evidence =
+        message.role === "assistant"
+          ? marketEvidenceText(message.market)
+          : null;
+      return `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.content}${evidence ? `\n\nMarket evidence: ${evidence.heading}\n${evidence.stateLabel}\n${evidence.detail}\n${evidence.timeLabel}` : ""}`;
+    })
+    .join(
+      "\n\n---\n\n",
+    )}\n\n---\nAI can make mistakes. Think critically. Trade responsibly.\n`;
 }
