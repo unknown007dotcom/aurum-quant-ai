@@ -88,6 +88,9 @@ module.exports = async function verifyDebateBrowser(origin, emit) {
         return route.continue({
           postData: JSON.stringify({
             ...body,
+            // This specific regression is intentionally no-data. Never attach
+            // synthetic research candles while claiming no market evidence.
+            terminalSkills: { enabled: false },
             temperature: 0,
             prompt:
               "Connectivity test only. No live market data is supplied. Explain what is missing, choose Stay Flat and N/A for all price fields. Do not propose or execute an order.",

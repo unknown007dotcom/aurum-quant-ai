@@ -187,8 +187,32 @@ async function verify(handler) {
     };
     console.log("[LIVE-MARKET] " + JSON.stringify(marketData));
   }
+  let terminalSkills;
+  if (process.env.AURUM_VERIFY_LIVE_TERMINAL_SKILLS === "1") {
+    const {
+      liveTerminalRequest,
+      assertTerminalSkillsReply,
+    } = require("./terminal-skills-live-check.cjs");
+    const body = await liveTerminalRequest();
+    const started = Date.now();
+    const reply = await invoke(handler, "ai-decision", "POST", {
+      ...body,
+      selectedModelKey: modelKey,
+    });
+    if (reply.code !== 200)
+      throw new Error(
+        `Live terminal research verification failed: ${reply.code} ${reply.data?.code || "no_reply"}`,
+      );
+    terminalSkills = {
+      ok: true,
+      ...(await assertTerminalSkillsReply(reply.data)),
+      durationMs: Date.now() - started,
+    };
+    console.log("[LIVE-TERMINAL-SKILLS] " + JSON.stringify(terminalSkills));
+  }
   return {
     ...(marketData ? { marketData } : {}),
+    ...(terminalSkills ? { terminalSkills } : {}),
     checkedAt: new Date().toISOString(),
     sourceRevision: process.env.AURUM_SOURCE_REVISION || null,
     chat: { ok: true, model: chat.data.model, savedSelectionRecovered: true },
@@ -284,12 +308,15 @@ module.exports = (req, res) => {
         { handle: "filesystem" },
       ],
       overrides: Object.fromEntries(
-        ["chat-store.mjs", "chat-persona.mjs", "chat-market-evidence.mjs"].map(
-          (name) => [
-            `modules/${name}`,
-            { contentType: "application/javascript; charset=utf-8" },
-          ],
-        ),
+        [
+          "chat-store.mjs",
+          "chat-persona.mjs",
+          "chat-market-evidence.mjs",
+          "terminal-analysis-skills.mjs",
+        ].map((name) => [
+          `modules/${name}`,
+          { contentType: "application/javascript; charset=utf-8" },
+        ]),
       ),
     }),
   );
@@ -302,7 +329,8 @@ module.exports = (req, res) => {
   );
   if (
     process.env.AURUM_VERIFY_LIVE_AI === "1" ||
-    process.env.AURUM_VERIFY_LIVE_MARKET === "1"
+    process.env.AURUM_VERIFY_LIVE_MARKET === "1" ||
+    process.env.AURUM_VERIFY_LIVE_TERMINAL_SKILLS === "1"
   ) {
     const report = await verify(handler);
     await fs.writeFile(

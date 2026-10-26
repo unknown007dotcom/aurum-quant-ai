@@ -18,6 +18,9 @@ import("./modules/analysis-engine.js").then(mod => {
     console.error("Failed to load SharedAnalysisEngine module", err);
 });
 
+// Optional local research helpers. A load failure must not disable main analysis.
+const terminalSkillsModule = import("./modules/terminal-analysis-skills.mjs?v=1").catch(() => null);
+
 // --- Constants & Config ---
 const STORAGE_KEY = "xauusd-analyzer-settings-v1";
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
@@ -66,6 +69,9 @@ let state = {
   botPollIntervalSeconds: 60,
   optionsDataKey: "",
   debateMode: "fast",
+  analysisSkillsEnabled: true,
+  analysisRiskBudget: null,
+  lastAnalysisSkills: null,
   selectedModelKey: "gpt-oss-default",
   models: [
     {
@@ -1435,11 +1441,123 @@ function fireAllLiquidityNotifications(events) {
     events.forEach(ev => fireLiquidityNotification(ev));
 }
 
+// --- Main-page research skills (no bot commands or account settings) ---
+function setupTerminalSkillsUI() {
+    const enabled = dom.get("#analysisSkillsEnabled");
+    const budget = dom.get("#analysisRiskBudget");
+    if (!enabled || !budget) return;
+    enabled.checked = state.analysisSkillsEnabled;
+    budget.value = state.analysisRiskBudget ?? "";
+    budget.disabled = !enabled.checked;
+    enabled.onchange = () => {
+        state.analysisSkillsEnabled = enabled.checked;
+        budget.disabled = !enabled.checked;
+        saveLocalSettings();
+        dom.get("#analysisSkillsControlNote").textContent = "Saved for the next preview. Existing results are unchanged; no broker setting was updated.";
+    };
+    budget.onchange = () => {
+        const value = Number(budget.value);
+        state.analysisRiskBudget = budget.value.trim() && Number.isFinite(value) && value > 0 && value <= 10000000 ? value : null;
+        budget.value = state.analysisRiskBudget ?? "";
+        saveLocalSettings();
+        dom.get("#analysisSkillsControlNote").textContent = "Hypothetical USD risk budget saved for the next preview. It is not an account balance or an order setting.";
+    };
+}
+
+async function prepareTerminalSkills(analysis, mtfData) {
+    if (!state.analysisSkillsEnabled) {
+        renderTerminalSkills(null, "Research checks are off for this run. The existing AI analysis still runs.");
+        return null;
+    }
+    let timer;
+    try {
+        const helpers = await Promise.race([
+            terminalSkillsModule,
+            new Promise(resolve => { timer = setTimeout(() => resolve(null), 500); }),
+        ]);
+        if (!helpers) throw new Error("Optional research module unavailable");
+        const input = helpers.buildTerminalSkillInput(analysis, mtfData, {
+            instrument: state.botInstrument, timeframe: state.selectedTimeframe,
+            riskBudgetUsd: state.analysisRiskBudget,
+        });
+        state.lastAnalysisSkills = helpers.evaluateTerminalSkills(input);
+        renderTerminalSkills(state.lastAnalysisSkills, "Local checks calculated. AI review is still pending.");
+        return input;
+    } catch {
+        state.lastAnalysisSkills = null;
+        renderTerminalSkills({ status: "unavailable", reason: "module_unavailable" }, "Research checks unavailable; continuing the existing AI analysis without them. Refresh the page to retry the optional module.");
+        return null;
+    } finally { clearTimeout(timer); }
+}
+
+function renderTerminalSkills(review, message) {
+    try {
+        const panel = dom.get("#analysisSkillsPanel");
+        if (!panel) return;
+        const badge = dom.get("#analysisSkillsBadge");
+        const metrics = dom.get("#analysisSkillsMetrics");
+        const issues = dom.get("#analysisSkillsIssues");
+        const status = dom.get("#analysisSkillsRunStatus");
+        metrics.replaceChildren(); issues.replaceChildren();
+        status.textContent = message || "Research checks are not a trade approval.";
+        const put = (title, value, note, id) => {
+            const card = document.createElement("article");
+            card.className = "analysis-skills-metric";
+            const heading = document.createElement("h3"); heading.textContent = title;
+            const number = document.createElement("strong"); number.id = id; number.textContent = value;
+            const detail = document.createElement("p"); detail.textContent = note;
+            card.append(heading, number, detail); metrics.append(card);
+        };
+        const num = (value, digits = 2) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: digits }) : "—";
+        const q = review?.quality;
+        if (!review || !q || review.status === "unavailable") {
+            badge.textContent = !state.analysisSkillsEnabled ? "Off" : review ? "Unavailable" : "Not run";
+            badge.className = "badge muted";
+            if (review?.reason) {
+                const item = document.createElement("li");
+                item.textContent = `Research context was not usable (${String(review.reason).slice(0, 80)}). The normal AI pipeline is independent.`;
+                issues.append(item);
+            }
+            dom.get("#analysisSkillsDataNote").textContent = "At most 256 submitted candles are checked. No external skill scripts are executed.";
+            return;
+        }
+        badge.textContent = review.status === "computed" ? "Calculated" : "Caution";
+        badge.className = "badge";
+        const volatility = review.volatility || {};
+        const risk = review.risk || {};
+        const sizing = review.sizing || {};
+        put("Candle quality", `${num(q.usable, 0)} / ${num(q.submitted, 0)}`,
+            `Usable completed bars · ${num(q.gaps, 0)} time gaps. No gap filling.`, "analysisSkillsQualityValue");
+        put("Wilder ATR · 14 bars", volatility.atr14 === null || volatility.atr14 === undefined ? "Needs 15 bars" : `$${num(volatility.atr14, 4)}`,
+            `${num(volatility.atrPercent, 4)}% of last close · volatility, not direction.`, "analysisSkillsAtrValue");
+        const rr = Array.isArray(risk.grossRewardRisk) ? risk.grossRewardRisk.filter(value => typeof value === "number" && Number.isFinite(value)).slice(0, 2) : [];
+        put("Reference-plan gross R/R", rr.length ? rr.map((value, i) => `TP${i + 1} ${num(value)}R`).join(" · ") : risk.status === "flat" ? "Stay Flat" : "Unavailable",
+            risk.status === "invalid_reference_levels" ? "Invalid or missing directional stop/targets. Not an approved plan." : "Rule-engine reference prices, not the final AI plan. Execution costs excluded.", "analysisSkillsRRValue");
+        put("Hypothetical sizing", sizing.status === "hypothetical" ? `${num(sizing.ouncesEstimate, 3)} oz` : sizing.status === "needs_risk_budget" ? "No risk budget" : "Not calculated",
+            sizing.status === "hypothetical" ? `$${num(sizing.riskBudgetUsd)} user-supplied risk budget. Not a broker-validated order quantity.` : "No demo balance or risk percentage is assumed.", "analysisSkillsSizeValue");
+        const warnings = Array.isArray(q.issues) ? q.issues.filter(value => typeof value === "string").slice(0, 10) : [];
+        for (const warning of warnings) {
+            const item = document.createElement("li"); item.textContent = warning.slice(0, 300); issues.append(item);
+        }
+        dom.get("#analysisSkillsValidation").textContent = "Walk-forward / backtest: NOT RUN. This snapshot provides no verified win rate, profitability or out-of-sample result.";
+        dom.get("#analysisSkillsDataNote").textContent = [
+            `Selected timeframe: ${String(q.requestedTimeframe || "unknown").slice(0, 20)}. Observed spacing: ${num(q.observedIntervalMinutes)} min.`,
+            `Last candle open: ${typeof q.lastCandleAt === "string" ? q.lastCandleAt.slice(0, 40) : "unknown"}.`,
+            q.freshness === "stale" ? "Old snapshot — not live." : "Candle recency is not a live-quote or market-open check.",
+            "Calculated from the bounded submitted window; provider identity is not independently verified.",
+        ].join(" ");
+    } catch {
+        console.warn("The optional research panel could not render; the AI pipeline is unaffected.");
+    }
+}
+
 // --- Execution & UI ---
 async function runAnalysis() {
     if (state.isRunning) return;
     state.isRunning = true;
     let aiProgressTimer;
+    state.lastAnalysisSkills = null;
+    renderTerminalSkills(null, "Preparing the next research snapshot…");
     toggleScanUI(true);
     dom.setStatus("Running bot preview on the latest market structure...");
 
@@ -1506,6 +1624,7 @@ async function runAnalysis() {
         renderMarketUI(analysis);
         state.lastMtfData = mtfData;   // <--- INJECT THIS LINE!
         renderFibonacciOteUI(mtfData);
+        const terminalSkills = await prepareTerminalSkills(analysis, mtfData);
 
         // --- Step 2: Consult AI arbiter ---
         const runDebateMode = state.debateMode || "fast";
@@ -1533,6 +1652,7 @@ async function runAnalysis() {
                     debateModels: state.debateModels.map(({ key, id, bias, isDebateParticipant }) => ({ key, id, bias, isDebateParticipant })),
                     debateMode: runDebateMode,
                     temperature: state.temperature,
+                    ...(terminalSkills ? { terminalSkills } : {}),
                     prompt
                 }),
                 signal: controller.signal
@@ -1594,6 +1714,7 @@ function showAnalysisError(title, detail) {
     if (eq) eq.textContent = `Blocked by: ${title}. See Model Interpretation panel.`;
     const badge = dom.get("#aiBadge");
     if (badge) { badge.textContent = "ERROR"; badge.className = "badge muted"; }
+    renderTerminalSkills(state.lastAnalysisSkills, "Preview did not complete; research checks are not a current AI result.");
 }
 
 function buildLocalAiFallback(analysis, reason) {
@@ -2087,6 +2208,10 @@ function renderAiUI(ai, analysis) {
     }
 
     state.lastAiResult = { data, ai, analysis, direction: normalizedDirection };
+    const skills = ai.analysisSkills || state.lastAnalysisSkills;
+    if (skills) renderTerminalSkills(skills, ai.aiUsed === true
+      ? (ai.analysisSkills?.usedInPrompt ? "Research checks included in this AI request." : ai.analysisSkills ? "Research checks returned but were not added to AI context: unavailable data or prompt budget." : "Local research checks only; no server research receipt was returned.")
+      : "Local research evidence only — AI did not complete. This is not an AI trade plan.");
     renderDebatePanel(ai);
 
     // ── 7. Scorecard panel
@@ -3411,6 +3536,8 @@ function loadLocalSettings() {
             }
             if (parsed.debateModels && Array.isArray(parsed.debateModels)) state.debateModels = parsed.debateModels;
             if (["off", "fast", "deep", "full"].includes(parsed.debateMode)) state.debateMode = parsed.debateMode;
+            if (typeof parsed.analysisSkillsEnabled === "boolean") state.analysisSkillsEnabled = parsed.analysisSkillsEnabled;
+            if (typeof parsed.analysisRiskBudget === "number" && Number.isFinite(parsed.analysisRiskBudget) && parsed.analysisRiskBudget > 0 && parsed.analysisRiskBudget <= 10000000) state.analysisRiskBudget = parsed.analysisRiskBudget;
             if (parsed.selectedModelKey) state.selectedModelKey = parsed.selectedModelKey;
             if (parsed.temperature !== undefined) state.temperature = parsed.temperature;
             if (parsed.candleCount) state.candleCount = parsed.candleCount;
@@ -3435,6 +3562,8 @@ function saveLocalSettings() {
             debateModels: state.debateModels.map(({ apiKey, ...model }) => model),
             selectedModelKey: state.selectedModelKey,
             debateMode: state.debateMode,
+            analysisSkillsEnabled: state.analysisSkillsEnabled,
+            analysisRiskBudget: state.analysisRiskBudget,
             temperature: state.temperature,
             candleCount: state.candleCount,
             botMode: state.botMode,
@@ -3585,6 +3714,7 @@ async function saveAdminSettings(key, value) {
 
 function initSettingsUI() {
     loadLocalSettings();
+    setupTerminalSkillsUI();
     renderModelDropdowns();
     setupModelManager(false);
     setupModelManager(true);

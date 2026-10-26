@@ -48,6 +48,9 @@ const server = http.createServer(async (req, res) => {
   }
 });
 (async () => {
+  const { evaluateTerminalSkills, terminalSkillsPrompt } = await import(
+    "../modules/terminal-analysis-skills.mjs"
+  );
   await new Promise((resolve) => server.listen(0, "0.0.0.0", resolve));
   let browser;
   try {
@@ -101,7 +104,7 @@ const server = http.createServer(async (req, res) => {
     const prohibited = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const candles = Array.from({ length: 1000 }, (_, i) => ({
-      datetime: new Date(Date.UTC(2026, 9, 19) + i * 900000).toISOString(),
+      datetime: new Date(Date.now() - (1000 - i) * 900000).toISOString(),
       open: 4000 + i * 0.15,
       close: 4000.08 + i * 0.15,
       high: 4000.4 + i * 0.15,
@@ -145,19 +148,29 @@ const server = http.createServer(async (req, res) => {
     let responsePayload = successfulAnalysis;
     let responseStatus = 200;
     let responseDelay = 0;
+    let skillsModuleBlocked = false;
     const json = (route, payload) => route.fulfill({ json: payload });
     await context.route("**/*", async (route) => {
       const request = route.request();
       const url = new URL(request.url());
+      if (
+        skillsModuleBlocked &&
+        url.pathname === "/modules/terminal-analysis-skills.mjs"
+      )
+        return route.fulfill({ status: 404, body: "Not found" });
       if (url.pathname === "/api/chat") return json(route, config);
       if (url.pathname === "/api/ai-decision") {
-        calls.push({ url: request.url(), body: request.postDataJSON() });
+        const body = request.postDataJSON();
+        const review = evaluateTerminalSkills(body.terminalSkills);
+        if (review) review.usedInPrompt = Boolean(terminalSkillsPrompt(review));
+        calls.push({ url: request.url(), body });
         if (responseDelay)
           await new Promise((resolve) => setTimeout(resolve, responseDelay));
         return route.fulfill({
           status: responseStatus,
           json: {
             ...responsePayload,
+            ...(review ? { analysisSkills: review } : {}),
             debateMode: request.postDataJSON().debateMode,
           },
         });
@@ -277,6 +290,72 @@ const server = http.createServer(async (req, res) => {
     assert.equal(calls[0].body.debateMode, "fast");
     assert.deepEqual(prohibited, []);
     assert.deepEqual(errors, []);
+
+    assert.ok(await page.locator("#analysisSkillsPanel").isVisible());
+    assert.equal(calls[0].body.terminalSkills.enabled, true);
+    assert.equal(calls[0].body.terminalSkills.candles.length, 256);
+    assert.equal(
+      await page.locator("#analysisSkillsQualityValue").innerText(),
+      "256 / 256",
+    );
+    assert.match(
+      await page.locator("#analysisSkillsAtrValue").innerText(),
+      /0\.6/,
+    );
+    assert.match(
+      await page.locator("#analysisSkillsRunStatus").innerText(),
+      /included in this AI request/,
+    );
+    assert.match(
+      await page.locator("#analysisSkillsValidation").innerText(),
+      /NOT RUN/,
+    );
+    await page.locator("#analysisRiskBudget").fill("50");
+    await page.locator("#analysisRiskBudget").press("Tab");
+    const beforeBudgetRun = calls.length;
+    await page.evaluate(() => runAnalysis());
+    assert.equal(
+      calls.length,
+      beforeBudgetRun + 1,
+      "Skills must not fan out extra AI requests",
+    );
+    assert.equal(calls.at(-1).body.terminalSkills.riskBudgetUsd, 50);
+    await page.locator("#analysisSkillsEnabled").uncheck();
+    await page.evaluate(() => runAnalysis());
+    assert.ok(!Object.hasOwn(calls.at(-1).body, "terminalSkills"));
+    assert.equal(await page.locator("#aiBadge").innerText(), "COMPLETE");
+    assert.match(
+      await page.locator("#analysisSkillsBadge").innerText(),
+      /^off$/i,
+    );
+    await page.reload();
+    await page.waitForFunction(() => state.lastAiResult && !state.isRunning);
+    assert.equal(
+      await page.locator("#analysisSkillsEnabled").isChecked(),
+      false,
+    );
+    assert.equal(await page.locator("#analysisRiskBudget").inputValue(), "50");
+    await page.locator("#analysisSkillsEnabled").check();
+    await page.evaluate(() => runAnalysis());
+    await page.evaluate(() => {
+      const review = JSON.parse(
+        JSON.stringify(state.lastAiResult.ai.analysisSkills),
+      );
+      review.quality.issues = [
+        '<img src=x onerror="window.skillsInjected=true">',
+      ];
+      renderTerminalSkills(
+        review,
+        "<script>window.skillsInjected=true</script>",
+      );
+    });
+    assert.equal(
+      await page
+        .locator("#analysisSkillsPanel img, #analysisSkillsPanel script")
+        .count(),
+      0,
+    );
+    assert.ok(!(await page.evaluate(() => window.skillsInjected)));
 
     const partialCouncil = {
       ...successfulAnalysis,
@@ -448,6 +527,14 @@ const server = http.createServer(async (req, res) => {
     await page.evaluate(() => runAnalysis());
     assert.equal(await page.locator("#aiBadge").innerText(), "AI UNAVAILABLE");
     assert.equal(
+      await page.locator("#analysisSkillsMetrics article").count(),
+      4,
+    );
+    assert.match(
+      await page.locator("#analysisSkillsRunStatus").innerText(),
+      /AI did not complete/,
+    );
+    assert.equal(
       await page.evaluate(() => state.lastAiResult.ai.debateResponses.length),
       2,
     );
@@ -518,6 +605,39 @@ const server = http.createServer(async (req, res) => {
     await page.keyboard.press("Escape");
     assert.deepEqual(errors, []);
     assert.deepEqual(prohibited, []);
+    await page.keyboard.press("Escape");
+    await page.locator("#analysisSkillsPanel").scrollIntoViewIfNeeded();
+    const skillsBounds = await page
+      .locator("#analysisSkillsPanel")
+      .boundingBox();
+    assert.ok(
+      skillsBounds.x >= 0 && skillsBounds.x + skillsBounds.width <= 391,
+    );
+    if (process.env.AURUM_TEST_DEBATE_SCREENSHOTS)
+      await page.screenshot({ path: "scratch/terminal-skills-mobile.png" });
+    skillsModuleBlocked = true;
+    await page.reload();
+    await page.waitForFunction(() => state.lastAiResult && !state.isRunning);
+    assert.ok(!Object.hasOwn(calls.at(-1).body, "terminalSkills"));
+    assert.equal(await page.locator("#aiBadge").innerText(), "COMPLETE");
+    assert.match(
+      await page.locator("#analysisSkillsRunStatus").innerText(),
+      /Research checks unavailable/,
+    );
+    skillsModuleBlocked = false;
+    await page.reload();
+    await page.waitForFunction(() => state.lastAiResult && !state.isRunning);
+    assert.equal(calls.at(-1).body.terminalSkills.enabled, true);
+    assert.deepEqual(prohibited, []);
+    assert.deepEqual(errors, []);
+    await page.evaluate(() => document.getElementById("analysisSkillsMetrics").remove());
+    await page.evaluate(() => runAnalysis());
+    assert.equal(await page.locator("#aiBadge").innerText(), "COMPLETE");
+    assert.equal(await page.evaluate(() => state.isRunning), false);
+    assert.deepEqual(errors, []);
+    console.log(
+      "PASS: Main-page research checks, bounded request input, opt-out and budget persistence, safe rendering, mobile layout, AI-failure disclosure and optional-module failure/recovery. No new provider or trading calls.",
+    );
     console.log(
       "PASS: Debate tabs, partial/all-failed/empty states, safe text rendering, summary failure recovery, progress timer, saved modes, keyboard and mobile layout.",
     );

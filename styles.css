@@ -3146,3 +3146,30 @@ button:disabled {
 @media (prefers-reduced-motion: reduce) {
   #debateCouncilModal button { transition: none; }
 }
+
+/* Optional research overlay belongs only to the terminal, not Chat Mode. */
+.analysis-skills-panel { grid-column: 1 / -1; }
+.analysis-skills-controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+.analysis-skills-toggle { display: flex; gap: 10px; align-items: center; font-size: .88rem; }
+.analysis-skills-toggle input { width: 18px; height: 18px; accent-color: var(--accent); flex: 0 0 18px; }
+.analysis-skills-budget { display: grid; gap: 7px; margin-left: auto; max-width: 100%; color: var(--muted); font-size: .8rem; }
+.analysis-skills-budget input { width: 220px; max-width: 100%; padding: 9px 12px; border: 1px solid var(--panel-border); border-radius: 10px; color: var(--text); background: var(--panel-soft); }
+.analysis-skills-panel input:focus-visible, .analysis-skills-panel summary:focus-visible, .analysis-skills-panel a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.analysis-skills-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.analysis-skills-metric { min-width: 0; padding: 15px; background: var(--panel-soft); border: 1px solid var(--panel-border); border-radius: 14px; overflow-wrap: anywhere; }
+.analysis-skills-metric h3 { margin: 0 0 10px; font-size: .8rem; font-weight: 500; color: var(--muted); }
+.analysis-skills-metric strong { display: block; font-size: 1.15rem; line-height: 1.45; }
+.analysis-skills-metric p { margin: 9px 0 0; color: var(--muted); font-size: .76rem; line-height: 1.6; }
+.analysis-skills-issues { padding-left: 20px; color: var(--accent); line-height: 1.65; font-size: .82rem; }
+.analysis-skills-validation { padding: 12px 14px; background: var(--panel-soft); border-left: 3px solid var(--accent); border-radius: 6px; font-size: .82rem; line-height: 1.65; }
+.analysis-skills-source { margin-top: 16px; color: var(--muted); font-size: .8rem; line-height: 1.7; }
+.analysis-skills-source summary { color: var(--text); cursor: pointer; }
+.analysis-skills-source a { color: var(--accent); }
+#analysisSkillsDataNote { overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .analysis-skills-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .analysis-skills-metrics { grid-template-columns: 1fr; }
+  .analysis-skills-budget { margin-left: 0; width: 100%; }
+  .analysis-skills-budget input { width: 100%; }
+  .analysis-skills-panel .panel-head { align-items: flex-start; }
+}

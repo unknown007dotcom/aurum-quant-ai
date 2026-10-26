@@ -75,3 +75,18 @@ bounded deadline. See [the reproduced failures and repair](docs/ai-response-reco
 `npm run verify:live-ai -- --browser` is an **opt-in live** HTTP/browser check after
 deployment. It makes genuine provider requests, checks meaningful replies and
 conversation context, and does not place orders or change server settings.
+
+## Main analysis: selected research skills
+
+The `index.html` terminal has an **Analysis skills** panel (not part of Mira).
+It adapts five MIT-licensed AGIPro research workflows: bounded OHLC data-quality
+checks, Wilder ATR volatility, gross reward/risk checks, optional hypothetical
+sizing from a user-entered USD risk budget, and a walk-forward readiness notice.
+Calculated context is included in the existing AI/debate request, without extra
+model calls, Python processes or new broker requests. The original response
+schema and trading controls remain unchanged.
+
+The integration is **not an installation of all 68 upstream skills**. It does not
+run a backtest, infer a win rate, use demo account balances, import crypto risk
+limits, or execute orders. Controls apply to the next preview and can disable the
+research overlay. See [terminal research integration](docs/terminal-analysis-skills.md).

@@ -5,14 +5,15 @@
   "scripts": {
     "dev": "wrangler dev",
     "publish": "wrangler publish",
-    "test": "node tests/analysis-engine.test.js && node --test tests/chat.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs tests/chat-market.test.mjs",
+    "test": "node tests/analysis-engine.test.js && node --test tests/chat.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs tests/chat-market.test.mjs tests/terminal-skills.test.mjs",
     "check-build": "wrangler deploy --dry-run",
     "test:chat-layout": "node tests/chat-layout.browser.cjs",
     "build:vercel": "node tools/build-vercel.cjs",
     "test:ai-ui": "node tests/ai-routing.browser.cjs",
     "verify:live-ai": "node tools/verify-live-ai.cjs",
     "test:chat-market": "node tests/chat-market.browser.cjs",
-    "verify:live-market": "node tools/verify-live-market.cjs"
+    "verify:live-market": "node tools/verify-live-market.cjs",
+    "verify:live-terminal-skills": "node tools/verify-live-terminal-skills.cjs"
   },
   "dependencies": {
     "firebase": "^12.12.1",

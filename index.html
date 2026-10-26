@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=31">
+  <link rel="stylesheet" href="./styles.css?v=32">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -378,6 +378,35 @@
       </section>
 
 
+
+      <section id="analysisSkillsPanel" class="panel analysis-skills-panel" aria-labelledby="analysisSkillsTitle">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Bounded research checks · main analysis only</p>
+            <h2 id="analysisSkillsTitle">Analysis skills</h2>
+          </div>
+          <span id="analysisSkillsBadge" class="badge muted">Not run</span>
+        </div>
+        <div class="analysis-skills-controls">
+          <label class="analysis-skills-toggle"><input id="analysisSkillsEnabled" type="checkbox" checked> Include research checks in AI analysis</label>
+          <label class="analysis-skills-budget" for="analysisRiskBudget">Optional hypothetical risk budget (USD)
+            <input id="analysisRiskBudget" type="number" inputmode="decimal" min="0.01" max="10000000" step="any" placeholder="Not supplied" aria-describedby="analysisSkillsControlNote">
+          </label>
+        </div>
+        <p id="analysisSkillsControlNote" class="status-text">Controls apply to the next preview. This is not your broker balance or an order setting.</p>
+        <p id="analysisSkillsRunStatus" class="status-text" role="status">Checks populate from the next market snapshot; no extra AI calls.</p>
+        <div id="analysisSkillsMetrics" class="analysis-skills-metrics"></div>
+        <ul id="analysisSkillsIssues" class="analysis-skills-issues"></ul>
+        <p id="analysisSkillsValidation" class="analysis-skills-validation">Walk-forward / backtest: not run. No win-rate or profitability estimate is inferred from a snapshot.</p>
+        <p id="analysisSkillsDataNote" class="status-text">At most 256 submitted candles are audited. No missing candles are fabricated.</p>
+        <details class="analysis-skills-source">
+          <summary>What is included · source and limitations</summary>
+          <p>Selected adaptations: OHLC data quality, ATR volatility, gross reward/risk review, hypothetical sizing, and walk-forward readiness. Not all 68 skills or their Python tools are installed.</p>
+          <p>No crypto risk presets, demo account balances, 365-day annualization, automated orders or trading-control changes. Gross calculations exclude spread, slippage, financing, broker size limits and margin checks.</p>
+          <a href="https://github.com/agiprolabs/claude-trading-skills/tree/981e1d736cdc02bdc1c55c74ec9224e956414706" target="_blank" rel="noopener noreferrer">AGIPro reference · pinned revision 981e1d7</a>
+          <span aria-hidden="true"> · </span><a href="./assets/licenses/claude-trading-skills-MIT.txt" target="_blank" rel="noopener noreferrer">MIT license</a>
+        </details>
+      </section>
 
       <section class="panel scorecard-panel">
         <div class="panel-head">
@@ -816,6 +845,6 @@
     </div>
   </aside>
 
-  <script src="./app.js?v=39"></script>
+  <script src="./app.js?v=40"></script>
 </body>
 </html>
