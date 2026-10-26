@@ -144,7 +144,7 @@ async function main() {
       decisionTimeframe: "M15 completed-entry bars",
       executionResolution: "M5 midpoint OHLC",
       strategy:
-        "Current main-page AnalysisEngine, LiquidityEngine, buildAiPrompt, Fast council, final validator and rule/AI conflict guard; not the different automated-bot strategy.",
+        "Current main-page AnalysisEngine, LiquidityEngine, buildAiPrompt, Fast council, final validator and rule/AI conflict guard; not the different automated-bot strategy. Observational diagnostic-log formatting is disabled in the isolated runner; output parity is tested.",
       historyWindow:
         "Available cache prefix up to the live 5000-bar cache cap. The exact historical cache contents are not archived; older rows evicted before collection cannot be reconstructed.",
       higherTimeframes:
@@ -247,8 +247,23 @@ async function main() {
     cutoff < end;
     cutoff += FIFTEEN, index++
   ) {
+    if (Date.now() - started > 10 * 60 * 1000)
+      throw new Error(
+        "Historical input preparation exceeded its separate safety budget; no AI calls made.",
+      );
+    const prepareStarted = Date.now();
     const snap = snapshotAt(dataset, cutoff);
     const { analysis, prompt } = replay.evaluate(snap.market, cutoff);
+    if (index === 1 || index % 8 === 0 || index === SESSION.checkpoints)
+      console.log(
+        "[BACKTEST-PREPARE] " +
+          JSON.stringify({
+            index,
+            asOf: new Date(cutoff).toISOString(),
+            durationMs: Date.now() - prepareStarted,
+            aiCallsSoFar: completions,
+          }),
+      );
     const skillInput = buildTerminalSkillInput(analysis, snap.market, {
       instrument: "XAU_USD",
       timeframe: "15min",

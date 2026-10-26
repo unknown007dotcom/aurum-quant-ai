@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { spawnSync } = require("node:child_process");
 
 const FIVE = 300000,
   FIFTEEN = 900000;
@@ -228,10 +229,11 @@ function extract(source, start, end) {
   );
   return source.slice(a, b);
 }
-function createStrategyReplay(root) {
+function createStrategyReplay(root, options = {}) {
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const { AnalysisEngine: shared } = require(
+  const sharedSource = fs.readFileSync(
     path.join(root, "modules/analysis-engine.js"),
+    "utf8",
   );
   const code =
     extract(
@@ -241,58 +243,84 @@ function createStrategyReplay(root) {
     ) +
     "\n" +
     extract(app, "function buildAiPrompt(", "function extractAiText(");
-  let clock = Date.parse(SESSION.start);
-  const RealDate = Date;
-  class ClockDate extends RealDate {
-    constructor(...args) {
-      super(...(args.length ? args : [clock]));
-    }
-    static now() {
-      return clock;
-    }
+  if (options.engine !== "vm") {
+    return {
+      strategySha256: sha256(app),
+      extractedLogicSha256: sha256(sharedSource + "\n" + code),
+      evaluate(market, asOf) {
+        const result = spawnSync(
+          process.execPath,
+          [path.join(root, "tools/backtest/strategy-native-worker.cjs")],
+          {
+            input: JSON.stringify({
+              market,
+              asOf,
+              keepDiagnosticLogs: options.keepDiagnosticLogs === true,
+            }),
+            encoding: "utf8",
+            timeout: 30000,
+            maxBuffer: 8 * 1024 * 1024,
+            // Broker/model credentials do not enter the computation subprocess.
+            env: { TZ: "Asia/Kolkata", PATH: process.env.PATH || "" },
+          },
+        );
+        if (result.error || result.status !== 0)
+          throw new Error(
+            `Historical strategy worker failed: ${result.error?.message || result.stderr.slice(0, 500) || result.signal}`,
+          );
+        return JSON.parse(result.stdout);
+      },
+    };
   }
+  // Keep arrays, dates and math inside one native VM realm. Passing host-realm
+  // math functions/arrays through thousands of candle operations is needlessly
+  // expensive; the exact strategy/helper source is unchanged here.
   const context = vm.createContext(
     {
-      SharedAnalysisEngine: shared,
-      Date: ClockDate,
-      Intl,
-      Math,
-      Set,
-      Map,
-      Number,
-      String,
-      Array,
-      JSON,
-      state: {
-        selectedTimeframe: "15min",
-        selectedTimezone: "Asia/Kolkata",
-        currentRmi: 100,
-        previousRmi: 100,
-        rmiBias: "neutral",
-      },
+      __clock: Date.parse(SESSION.start),
       console: { log() {}, warn() {}, error() {} },
     },
     { codeGeneration: { strings: false, wasm: false } },
   );
-  new vm.Script(
-    code +
-      "\n globalThis.__run = data => { const analysis=AnalysisEngine.run(data); analysis.liquidityPools=LiquidityEngine.computeLiquidityPools(data); analysis.liquidityEvents=LiquidityEngine.scanAllLiquidityEvents(analysis.liquidityPools,data); analysis.sessionLevels=LiquidityEngine._sessionState; return { analysis, prompt:buildAiPrompt(analysis,data) }; };",
-    { filename: "current-terminal-strategy.js" },
-  ).runInContext(context, { timeout: 5000 });
+  const setup = `
+    const NativeDate = Date;
+    globalThis.Date = class ReplayDate extends NativeDate {
+      constructor(...args) { super(...(args.length ? args : [globalThis.__clock])); }
+      static now() { return globalThis.__clock; }
+    };
+    const SharedAnalysisEngine = (() => { const module = { exports: {} }; ${sharedSource}; return module.exports.AnalysisEngine; })();
+    const state = { selectedTimeframe: "15min", selectedTimezone: "Asia/Kolkata", currentRmi: 100, previousRmi: 100, rmiBias: "neutral" };
+    ${code}
+    ${options.keepDiagnosticLogs ? "" : "LiquidityEngine._addDiagnosticLog = () => {};"}
+    globalThis.__run = data => {
+      const analysis = AnalysisEngine.run(data);
+      analysis.liquidityPools = LiquidityEngine.computeLiquidityPools(data);
+      analysis.liquidityEvents = LiquidityEngine.scanAllLiquidityEvents(analysis.liquidityPools, data);
+      analysis.sessionLevels = LiquidityEngine._sessionState;
+      return { analysis, prompt: buildAiPrompt(analysis, data) };
+    };
+  `;
+  new vm.Script(setup, {
+    filename: "current-terminal-strategy.js",
+  }).runInContext(context, { timeout: 5000 });
+  const execute = new vm.Script(
+    "JSON.stringify(__run(JSON.parse(__inputJSON)))",
+  );
   return {
     strategySha256: sha256(app),
-    extractedLogicSha256: sha256(code),
+    extractedLogicSha256: sha256(sharedSource + "\n" + code),
     evaluate(market, asOf) {
-      clock = asOf;
-      context.__input = JSON.parse(JSON.stringify(market));
-      const result = new vm.Script("__run(__input)").runInContext(context, {
-        timeout: 10000,
-      });
-      delete context.__input;
-      return JSON.parse(JSON.stringify(result));
+      context.__clock = asOf;
+      context.__inputJSON = JSON.stringify(market);
+      try {
+        return JSON.parse(execute.runInContext(context, { timeout: 30000 }));
+      } finally {
+        delete context.__inputJSON;
+      }
     },
   };
 }
+
 module.exports = {
   SESSION,
   FIVE,

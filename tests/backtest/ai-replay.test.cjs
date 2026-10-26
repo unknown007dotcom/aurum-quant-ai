@@ -393,3 +393,46 @@ test("CSV exports neutralize formula-like AI text without corrupting numeric los
   assert.match(csvCell('=HYPERLINK("x")'), /^"'/);
   assert.match(csvCell("@SUM(A1)"), /^"'/);
 });
+
+test("disabling observational diagnostic logs does not change the strategy or its AI prompt", () => {
+  process.env.TZ = "Asia/Kolkata";
+  const data = normalizeDataset(datasetFixture());
+  const snap = snapshotAt(data, start + FIFTEEN);
+  // Retain a representative bounded window for parity without repeating the
+  // historical debug formatter thousands of times in every test.
+  for (const frame of snap.market.data)
+    if (
+      Array.isArray(frame.values) &&
+      !["1month", "1week", "1day", "benchmark"].includes(frame.id)
+    )
+      frame.values = frame.values.slice(-200);
+  const original = createStrategyReplay(path.resolve(__dirname, "../.."), {
+    keepDiagnosticLogs: true,
+  });
+  const quiet = createStrategyReplay(path.resolve(__dirname, "../.."));
+  assert.deepEqual(
+    quiet.evaluate(snap.market, start + FIFTEEN),
+    original.evaluate(snap.market, start + FIFTEEN),
+  );
+});
+
+test("native subprocess and VM execute identical current strategy logic at the same cutoff", () => {
+  process.env.TZ = "Asia/Kolkata";
+  const data = normalizeDataset(datasetFixture());
+  const snap = snapshotAt(data, start + FIFTEEN);
+  for (const frame of snap.market.data)
+    if (
+      Array.isArray(frame.values) &&
+      !["1month", "1week", "1day", "benchmark"].includes(frame.id)
+    )
+      frame.values = frame.values.slice(-200);
+  const isolated = createStrategyReplay(path.resolve(__dirname, "../.."));
+  const original = createStrategyReplay(path.resolve(__dirname, "../.."), {
+    engine: "vm",
+    keepDiagnosticLogs: true,
+  });
+  assert.deepEqual(
+    isolated.evaluate(snap.market, start + FIFTEEN),
+    original.evaluate(snap.market, start + FIFTEEN),
+  );
+});
