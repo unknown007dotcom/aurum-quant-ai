@@ -60,4 +60,36 @@ npm run verify:live-market -- --browser
 
 The new terminal browser check uses the **actual browser-built market prompt and feed**, not a replacement no-data prompt. It permits real market reads and the AI request but intercepts history writes, mocks bot status as disabled, and blocks trading/settings commands. The older no-data debate diagnostic explicitly disables research input so synthetic chart candles are never submitted as live evidence.
 
-Live release results will be recorded after staged and canonical public verification. Passing synthetic local tests alone is not proof of a deployed response.
+## Verified release — 26 October 2026
+
+- Application revision: `97d7c405fd7b679fb7aba2fe69260409bf768769`.
+- Production deployment: `dpl_Hh3qECaedcbASqEfr789Y6eqiq4o`, **READY / PROMOTED**, on the existing project.
+- Canonical release receipt: **2026-10-26 04:39:26.809 UTC** at `/ai-release-check.json`.
+- Staged and production packaged-handler gates both returned genuine AI replies with computed research evidence. Production reviewed 255 completed candles and computed Wilder ATR **7.585157**; research computation took **2 ms** in that check. Its quality-only research request took 11.956 s overall, and the existing chat/debate/Mira-market gates also passed.
+
+The separate deployed-browser test completed at **04:42:35.438 UTC**, using the **actual browser-built 4,675-character market prompt** and real market feed, without substituting a no-data request:
+
+| Main-page verification | Observed result |
+| --- | --- |
+| Submitted/reviewed window | 256 submitted; 255 usable completed candles |
+| Last completed candle opening timestamp | 2026-10-26 04:15:00 UTC |
+| Calculated ATR(14) | 7.585157 USD per ounce |
+| Source quality | Recent candles; time gaps disclosed with session/weekend caveat; no gap filling |
+| AI response | Genuine structured GPT-OSS 20B answer; research digest included |
+| Backtest/walk-forward status | Explicitly **not run** |
+| New research computation | 3 ms |
+| Analysis-service total | 20.111 s (debate 6.315 s, final synthesis 13.791 s) |
+| Whole browser check | 25.489 s including market/page loading and UI checks |
+| AI requests triggered by the page | Exactly one |
+| UI | Research panel and four metrics visible; 390 px mobile bounds passed; zero page errors |
+| Side effects | One history write intercepted; no trading/settings commands sent |
+
+These timings are observations, not guarantees or a claim that the full market workflow is as quick as a tiny connectivity prompt. The new arithmetic adds no separate model call and did not replace the normal AI answer.
+
+Additional canonical-production regressions passed: default chat (1.047 s), saved-model/context recovery (0.947 s), no-data structured analysis (8.533 s), visible Mira recovery (1.344 s), debate browser/tabs/mobile (9.868 s), and genuine OANDA-backed Mira HTTP/browser replies (6.383 s / 4.995 s). One no-data request used three successful roles from **one** model while GPT-OSS 20B was in the existing temporary debate cooldown; the subsequent browser run used two models. Actual identities/counts were disclosed, not represented as three independent models.
+
+Mira's code and market integration, provider transport, final system prompt, broker/order code, cron handlers, credential handling and Worker source retained their pre-change hashes. No credentials, account environment, broker controls, server settings or daily cron schedules were changed. The Worker was dry-run validated, not deployed.
+
+[Open the main analysis skills panel](https://aurum-quant-ai.vercel.app/#analysisSkillsPanel) · [Release receipt](https://aurum-quant-ai.vercel.app/ai-release-check.json)
+
+The staged and verification preview deployments were deleted after the results were recorded; the live production deployment and prior production rollback deployments remain intact. Verification establishes working data flow, bounded calculations and visible replies, not trading accuracy or profitability.
