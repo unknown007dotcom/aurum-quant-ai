@@ -13,7 +13,9 @@
     "verify:live-ai": "node tools/verify-live-ai.cjs",
     "test:chat-market": "node tests/chat-market.browser.cjs",
     "verify:live-market": "node tools/verify-live-market.cjs",
-    "verify:live-terminal-skills": "node tools/verify-live-terminal-skills.cjs"
+    "verify:live-terminal-skills": "node tools/verify-live-terminal-skills.cjs",
+    "test:backtest": "node --test tests/backtest/*.test.cjs",
+    "backtest:ai-session": "node tools/backtest/run-ai-session.mjs"
   },
   "dependencies": {
     "firebase": "^12.12.1",
