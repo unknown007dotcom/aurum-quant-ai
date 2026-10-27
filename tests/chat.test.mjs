@@ -285,8 +285,8 @@ test("provider requests retain context, zero temperature, and chosen response st
     "https://integrate.api.nvidia.com/v1/chat/completions",
   );
   assert.equal(captured.body.temperature, 0);
-  assert.equal(captured.body.max_tokens, 800);
-  assert.equal(captured.body.stream, false);
+  assert.equal(captured.body.max_tokens, 700);
+  assert.equal(captured.body.stream, true);
   assert.deepEqual(captured.body.messages.slice(1), messages);
   assert.match(
     captured.body.messages[0].content,
@@ -303,6 +303,32 @@ test("provider requests retain context, zero temperature, and chosen response st
     content: "A helpful response.",
     model: "test/instruct-model",
   });
+});
+
+test("very long conversations send only the most recent turns to the provider", async () => {
+  let captured;
+  const filler = "x".repeat(7900);
+  const messages = [
+    message(filler),
+    { role: "assistant", content: filler },
+    message(filler),
+    { role: "assistant", content: filler },
+    message(filler),
+    { role: "assistant", content: filler },
+    message("Final question"),
+  ];
+  await completeChat(request({ messages }), settings, {}, async (url, options) => {
+    captured = JSON.parse(options.body);
+    return successfulFetch();
+  });
+  const sent = captured.messages.slice(1);
+  const sentCharacters = sent.reduce(
+    (total, entry) => total + entry.content.length,
+    0,
+  );
+  assert.ok(sentCharacters <= 32014);
+  assert.ok(sent.length < messages.length);
+  assert.equal(sent.at(-1).content, "Final question");
 });
 
 test("client-supplied credentials, endpoints, and system prompts are ignored", async () => {

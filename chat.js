@@ -457,10 +457,12 @@ async function requestReply(regenerate = false) {
   pending = operation;
   chat.error = "";
   renderConversation();
+  // The server allows up to ~110s of generation after model discovery;
+  // give the request enough room to receive that answer.
   const timeout = setTimeout(() => {
     operation.timedOut = true;
     operation.controller.abort();
-  }, 90000);
+  }, 150000);
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -617,7 +619,7 @@ async function loadConfiguration() {
   try {
     const response = await fetch("/api/chat", {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(20000),
     });
     const data = await response.json();
     if (!response.ok)

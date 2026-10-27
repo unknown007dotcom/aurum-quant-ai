@@ -270,6 +270,141 @@ test("expired request budget prevents starting additional model requests", async
   assert.equal(mock.calls.filter((call) => call.body).length, 0);
 });
 
+const sseResponse = (chunks) =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const chunk of chunks)
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`,
+            ),
+          );
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+const hangingSseResponse = () =>
+  new Response(new ReadableStream({ start() {} }), {
+    headers: { "content-type": "text/event-stream" },
+  });
+
+test("streaming completions aggregate SSE chunks into the visible answer", async () => {
+  const mock = provider([FAST], () =>
+    sseResponse(["Hello ", "streamed ", "world"]),
+  );
+  const runtime = await discoverModels(settings, {}, mock.fetch);
+  const result = await requestCompletion(
+    runtime.models[0],
+    [{ role: "user", content: "Hi" }],
+    { stream: true, timeoutMs: 5000, idleTimeoutMs: 1000 },
+    mock.fetch,
+  );
+  assert.equal(result.content, "Hello streamed world");
+  assert.equal(mock.calls.at(-1).body.stream, true);
+});
+
+test("a model that rejects streaming is retried once with a buffered request", async () => {
+  const mock = provider([FAST], (body) =>
+    body.stream ? Response.json({}, { status: 400 }) : answer("Buffered answer"),
+  );
+  const runtime = await discoverModels(settings, {}, mock.fetch);
+  const result = await requestCompletion(
+    runtime.models[0],
+    [{ role: "user", content: "Hi" }],
+    { stream: true, timeoutMs: 5000, idleTimeoutMs: 1000 },
+    mock.fetch,
+  );
+  assert.equal(result.content, "Buffered answer");
+  const completions = mock.calls.filter((call) => call.body);
+  assert.equal(completions.length, 2);
+  assert.equal(completions[0].body.stream, true);
+  assert.equal(completions[1].body.stream, false);
+});
+
+test("a stream that stops producing tokens fails as a timeout, not a hang", async () => {
+  const mock = provider([FAST], () => hangingSseResponse());
+  const runtime = await discoverModels(settings, {}, mock.fetch);
+  await assert.rejects(
+    requestCompletion(
+      runtime.models[0],
+      [{ role: "user", content: "Hi" }],
+      { stream: true, timeoutMs: 5000, idleTimeoutMs: 25 },
+      mock.fetch,
+    ),
+    (error) => error.code === "timeout" && error.status === 504,
+  );
+});
+
+test("a hung selected model stream falls back to a faster model", async () => {
+  const slowId = "example/slow-instruct";
+  const mock = provider([slowId, FAST], (body) =>
+    body.model === slowId
+      ? hangingSseResponse()
+      : sseResponse(["Fast ", "answer"]),
+  );
+  const runtime = await discoverModels(
+    {
+      globalNvidiaApiKey: "key",
+      defaultModelKey: slowId,
+      nvidiaModels: [{ id: slowId }],
+    },
+    {},
+    mock.fetch,
+  );
+  const result = await completeWithFallback(
+    runtime,
+    selectModel(runtime),
+    [{ role: "user", content: "Hello" }],
+    {
+      stream: true,
+      idleTimeoutMs: 30,
+      timeoutMs: 1000,
+      deadline: Date.now() + 5000,
+    },
+    mock.fetch,
+  );
+  assert.equal(result.content, "Fast answer");
+  assert.equal(result.model, FAST);
+  assert.equal(result.modelFallbackUsed, true);
+  assert.equal(result.failures[0].code, "timeout");
+});
+
+test("the final fallback candidate may use the remaining deadline beyond the per-attempt cap", async () => {
+  const mock = provider(
+    [FAST],
+    (body, options) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(answer("Slow but complete")),
+          80,
+        );
+        options.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            const error = new Error("Aborted");
+            error.name = "AbortError";
+            reject(error);
+          },
+          { once: true },
+        );
+      }),
+  );
+  const runtime = await discoverModels(settings, {}, mock.fetch);
+  const result = await completeWithFallback(
+    runtime,
+    selectModel(runtime),
+    [{ role: "user", content: "Hello" }],
+    { timeoutMs: 10, deadline: Date.now() + 2000 },
+    mock.fetch,
+  );
+  assert.equal(result.content, "Slow but complete");
+});
+
 test("chat replies use active models while preserving Mira and conversation context", async () => {
   const mock = provider();
   const result = await completeChat(
