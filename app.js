@@ -18,6 +18,9 @@ import("./modules/analysis-engine.js").then(mod => {
     console.error("Failed to load SharedAnalysisEngine module", err);
 });
 
+// Optional local research helpers. A load failure must not disable main analysis.
+const terminalSkillsModule = import("./modules/terminal-analysis-skills.mjs?v=1").catch(() => null);
+
 // --- Constants & Config ---
 const STORAGE_KEY = "xauusd-analyzer-settings-v1";
 const HISTORY_STORAGE_KEY = "xauusd-analyzer-history-v1";
@@ -65,12 +68,16 @@ let state = {
   botCooldownMinutes: 15,
   botPollIntervalSeconds: 60,
   optionsDataKey: "",
+  debateMode: "fast",
+  analysisSkillsEnabled: true,
+  analysisRiskBudget: null,
+  lastAnalysisSkills: null,
   selectedModelKey: "gpt-oss-default",
   models: [
     {
       key: "gpt-oss-default",
-      id: "openai/gpt-oss-120b",
-      label: "Main Summary Model (GPT-OSS-120B)",
+      id: "openai/gpt-oss-20b",
+      label: "Main Summary Model (GPT-OSS-20B)",
       apiKey: "",
       baseUrl: "https://integrate.api.nvidia.com/v1",
     }
@@ -100,7 +107,32 @@ let state = {
 function apiUrl(path) {
   const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${String(path || "")}`;
   const cleanBase = String(EDGE_API_BASE || "").replace(/\/+$/, "");
+  if (["/chat", "/ai-decision", "/ai-health"].includes(cleanPath)) return `/api${cleanPath}`;
   return `${cleanBase}${cleanPath}`;
+}
+
+let aiModelConfiguration = null;
+let aiModelConfigurationAt = 0;
+let aiModelRequest = null;
+async function loadAiModelConfiguration(force = false) {
+  if (!force && aiModelConfiguration && Date.now() - aiModelConfigurationAt < 60000) return aiModelConfiguration;
+  if (aiModelRequest) return aiModelRequest;
+  aiModelRequest = (async () => {
+    const response = await fetch(apiUrl("/chat"), { signal: AbortSignal.timeout(20000), headers: { Accept: "application/json" } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(data.models)) throw new Error(data.message || "AI model configuration is unavailable.");
+    const previousId = state.models.find(model => model.key === state.selectedModelKey)?.id;
+    state.models = data.models.map(model => ({ key: model.key, id: model.id, label: model.label || model.id, apiKey: "", baseUrl: APP_CONFIG.defaultBaseUrl }));
+    const available = new Set(state.models.map(model => model.id));
+    state.debateModels = state.debateModels.filter(model => available.has(model.id)).map(model => ({ ...model, apiKey: "", baseUrl: APP_CONFIG.defaultBaseUrl }));
+    state.selectedModelKey = state.models.find(model => model.id === previousId)?.key || data.defaultModelKey || state.models[0]?.key || "";
+    aiModelConfiguration = data;
+    aiModelConfigurationAt = Date.now();
+    saveLocalSettings();
+    renderModelDropdowns();
+    return data;
+  })();
+  try { return await aiModelRequest; } finally { aiModelRequest = null; }
 }
 
 const TIMEFRAME_TO_TRADINGVIEW = {
@@ -1409,10 +1441,123 @@ function fireAllLiquidityNotifications(events) {
     events.forEach(ev => fireLiquidityNotification(ev));
 }
 
+// --- Main-page research skills (no bot commands or account settings) ---
+function setupTerminalSkillsUI() {
+    const enabled = dom.get("#analysisSkillsEnabled");
+    const budget = dom.get("#analysisRiskBudget");
+    if (!enabled || !budget) return;
+    enabled.checked = state.analysisSkillsEnabled;
+    budget.value = state.analysisRiskBudget ?? "";
+    budget.disabled = !enabled.checked;
+    enabled.onchange = () => {
+        state.analysisSkillsEnabled = enabled.checked;
+        budget.disabled = !enabled.checked;
+        saveLocalSettings();
+        dom.get("#analysisSkillsControlNote").textContent = "Saved for the next preview. Existing results are unchanged; no broker setting was updated.";
+    };
+    budget.onchange = () => {
+        const value = Number(budget.value);
+        state.analysisRiskBudget = budget.value.trim() && Number.isFinite(value) && value > 0 && value <= 10000000 ? value : null;
+        budget.value = state.analysisRiskBudget ?? "";
+        saveLocalSettings();
+        dom.get("#analysisSkillsControlNote").textContent = "Hypothetical USD risk budget saved for the next preview. It is not an account balance or an order setting.";
+    };
+}
+
+async function prepareTerminalSkills(analysis, mtfData) {
+    if (!state.analysisSkillsEnabled) {
+        renderTerminalSkills(null, "Research checks are off for this run. The existing AI analysis still runs.");
+        return null;
+    }
+    let timer;
+    try {
+        const helpers = await Promise.race([
+            terminalSkillsModule,
+            new Promise(resolve => { timer = setTimeout(() => resolve(null), 500); }),
+        ]);
+        if (!helpers) throw new Error("Optional research module unavailable");
+        const input = helpers.buildTerminalSkillInput(analysis, mtfData, {
+            instrument: state.botInstrument, timeframe: state.selectedTimeframe,
+            riskBudgetUsd: state.analysisRiskBudget,
+        });
+        state.lastAnalysisSkills = helpers.evaluateTerminalSkills(input);
+        renderTerminalSkills(state.lastAnalysisSkills, "Local checks calculated. AI review is still pending.");
+        return input;
+    } catch {
+        state.lastAnalysisSkills = null;
+        renderTerminalSkills({ status: "unavailable", reason: "module_unavailable" }, "Research checks unavailable; continuing the existing AI analysis without them. Refresh the page to retry the optional module.");
+        return null;
+    } finally { clearTimeout(timer); }
+}
+
+function renderTerminalSkills(review, message) {
+    try {
+        const panel = dom.get("#analysisSkillsPanel");
+        if (!panel) return;
+        const badge = dom.get("#analysisSkillsBadge");
+        const metrics = dom.get("#analysisSkillsMetrics");
+        const issues = dom.get("#analysisSkillsIssues");
+        const status = dom.get("#analysisSkillsRunStatus");
+        metrics.replaceChildren(); issues.replaceChildren();
+        status.textContent = message || "Research checks are not a trade approval.";
+        const put = (title, value, note, id) => {
+            const card = document.createElement("article");
+            card.className = "analysis-skills-metric";
+            const heading = document.createElement("h3"); heading.textContent = title;
+            const number = document.createElement("strong"); number.id = id; number.textContent = value;
+            const detail = document.createElement("p"); detail.textContent = note;
+            card.append(heading, number, detail); metrics.append(card);
+        };
+        const num = (value, digits = 2) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US", { maximumFractionDigits: digits }) : "—";
+        const q = review?.quality;
+        if (!review || !q || review.status === "unavailable") {
+            badge.textContent = !state.analysisSkillsEnabled ? "Off" : review ? "Unavailable" : "Not run";
+            badge.className = "badge muted";
+            if (review?.reason) {
+                const item = document.createElement("li");
+                item.textContent = `Research context was not usable (${String(review.reason).slice(0, 80)}). The normal AI pipeline is independent.`;
+                issues.append(item);
+            }
+            dom.get("#analysisSkillsDataNote").textContent = "At most 256 submitted candles are checked. No external skill scripts are executed.";
+            return;
+        }
+        badge.textContent = review.status === "computed" ? "Calculated" : "Caution";
+        badge.className = "badge";
+        const volatility = review.volatility || {};
+        const risk = review.risk || {};
+        const sizing = review.sizing || {};
+        put("Candle quality", `${num(q.usable, 0)} / ${num(q.submitted, 0)}`,
+            `Usable completed bars · ${num(q.gaps, 0)} time gaps. No gap filling.`, "analysisSkillsQualityValue");
+        put("Wilder ATR · 14 bars", volatility.atr14 === null || volatility.atr14 === undefined ? "Needs 15 bars" : `$${num(volatility.atr14, 4)}`,
+            `${num(volatility.atrPercent, 4)}% of last close · volatility, not direction.`, "analysisSkillsAtrValue");
+        const rr = Array.isArray(risk.grossRewardRisk) ? risk.grossRewardRisk.filter(value => typeof value === "number" && Number.isFinite(value)).slice(0, 2) : [];
+        put("Reference-plan gross R/R", rr.length ? rr.map((value, i) => `TP${i + 1} ${num(value)}R`).join(" · ") : risk.status === "flat" ? "Stay Flat" : "Unavailable",
+            risk.status === "invalid_reference_levels" ? "Invalid or missing directional stop/targets. Not an approved plan." : "Rule-engine reference prices, not the final AI plan. Execution costs excluded.", "analysisSkillsRRValue");
+        put("Hypothetical sizing", sizing.status === "hypothetical" ? `${num(sizing.ouncesEstimate, 3)} oz` : sizing.status === "needs_risk_budget" ? "No risk budget" : "Not calculated",
+            sizing.status === "hypothetical" ? `$${num(sizing.riskBudgetUsd)} user-supplied risk budget. Not a broker-validated order quantity.` : "No demo balance or risk percentage is assumed.", "analysisSkillsSizeValue");
+        const warnings = Array.isArray(q.issues) ? q.issues.filter(value => typeof value === "string").slice(0, 10) : [];
+        for (const warning of warnings) {
+            const item = document.createElement("li"); item.textContent = warning.slice(0, 300); issues.append(item);
+        }
+        dom.get("#analysisSkillsValidation").textContent = "Walk-forward / backtest: NOT RUN. This snapshot provides no verified win rate, profitability or out-of-sample result.";
+        dom.get("#analysisSkillsDataNote").textContent = [
+            `Selected timeframe: ${String(q.requestedTimeframe || "unknown").slice(0, 20)}. Observed spacing: ${num(q.observedIntervalMinutes)} min.`,
+            `Last candle open: ${typeof q.lastCandleAt === "string" ? q.lastCandleAt.slice(0, 40) : "unknown"}.`,
+            q.freshness === "stale" ? "Old snapshot — not live." : "Candle recency is not a live-quote or market-open check.",
+            "Calculated from the bounded submitted window; provider identity is not independently verified.",
+        ].join(" ");
+    } catch {
+        console.warn("The optional research panel could not render; the AI pipeline is unaffected.");
+    }
+}
+
 // --- Execution & UI ---
 async function runAnalysis() {
     if (state.isRunning) return;
     state.isRunning = true;
+    let aiProgressTimer;
+    state.lastAnalysisSkills = null;
+    renderTerminalSkills(null, "Preparing the next research snapshot…");
     toggleScanUI(true);
     dom.setStatus("Running bot preview on the latest market structure...");
 
@@ -1479,29 +1624,35 @@ async function runAnalysis() {
         renderMarketUI(analysis);
         state.lastMtfData = mtfData;   // <--- INJECT THIS LINE!
         renderFibonacciOteUI(mtfData);
+        const terminalSkills = await prepareTerminalSkills(analysis, mtfData);
 
         // --- Step 2: Consult AI arbiter ---
-        dom.setStatus("Consulting Arbiter Council for Consensus...");
+        const runDebateMode = state.debateMode || "fast";
+        const aiStartedAt = Date.now();
+        const progressLabel = runDebateMode === "off" ? "Preparing AI summary" : `Running ${runDebateMode} debate and AI summary`;
+        dom.setStatus(`${progressLabel}…`);
+        aiProgressTimer = setInterval(() => dom.setStatus(`${progressLabel} · ${Math.floor((Date.now() - aiStartedAt) / 1000)}s elapsed`), 1000);
         const prompt = buildAiPrompt(analysis, mtfData);
+        await loadAiModelConfiguration().catch(() => null);
         const selectedModel = state.models.find(model => model.key === state.selectedModelKey) || state.models[0] || {};
 
         let aiRes, aiData;
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000);
+        const aiTimeoutMs = runDebateMode === "full" ? 135000 : runDebateMode === "deep" ? 115000 : 90000;
+        const timeoutId = setTimeout(() => controller.abort(), aiTimeoutMs);
         try {
-            aiRes = await fetch(`${EDGE_API_BASE}${APP_CONFIG.aiChatPath}`, {
+            aiRes = await fetch(apiUrl(APP_CONFIG.aiChatPath), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     selectedModelKey: state.selectedModelKey,
                     model: selectedModel?.id,
                     label: selectedModel?.label,
-                    apiKey: selectedModel?.apiKey,
-                    baseUrl: selectedModel?.baseUrl,
-                    models: state.models,
-                    debateModels: state.debateModels,
-                    debateMode: state.debateMode || "fast",
+                    models: state.models.map(({ key, id, label }) => ({ key, id, label })),
+                    debateModels: state.debateModels.map(({ key, id, bias, isDebateParticipant }) => ({ key, id, bias, isDebateParticipant })),
+                    debateMode: runDebateMode,
                     temperature: state.temperature,
+                    ...(terminalSkills ? { terminalSkills } : {}),
                     prompt
                 }),
                 signal: controller.signal
@@ -1511,7 +1662,7 @@ async function runAnalysis() {
         } catch (aiErr) {
             clearTimeout(timeoutId);
             const isTimeout = aiErr.name === "AbortError";
-            const failReason = isTimeout ? "Browser request timed out (exceeded 60s safety limit)." : `AI network failed: ${aiErr.message}`;
+            const failReason = isTimeout ? `AI request exceeded the ${Math.round(aiTimeoutMs / 1000)}s safety limit.` : `AI network failed: ${aiErr.message}`;
             dom.setStatus(`Market analysis complete. ${failReason}`);
             const fallbackPayload = buildLocalAiFallback(analysis, failReason);
             renderAiUI(fallbackPayload, analysis);
@@ -1526,14 +1677,17 @@ async function runAnalysis() {
             const serverMsg = aiData?.message || aiData?.fallbackReason || "Check API keys in Settings.";
             const failReason = parseSpecificAiFailureReason(aiRes.status, serverMsg);
             dom.setStatus(`AI unavailable (${aiRes.status}): ${failReason}`);
-            const fallbackPayload = buildLocalAiFallback(analysis, failReason);
+            // Keep real participant reviews visible when final synthesis fails.
+            const fallbackPayload = { ...aiData, ...buildLocalAiFallback(analysis, failReason) };
             renderAiUI(fallbackPayload, analysis);
             syncHistory(analysis, fallbackPayload);
             refreshBotStatus().catch(() => {});
             return;
         }
 
-        if (aiData?.fallbackReason) {
+        if (aiData?.modelFallbackReason) {
+            dom.setStatus(`AI analysis by ${aiData.model}: ${aiData.modelFallbackReason}`);
+        } else if (aiData?.fallbackReason) {
             dom.setStatus(`AI Arbiter: ${aiData.fallbackReason}`);
         } else {
             dom.setStatus(`Preview complete | RMI: ${state.currentRmi} | Bias: ${state.rmiBias}`);
@@ -1546,6 +1700,7 @@ async function runAnalysis() {
         showAnalysisError("Unexpected Error", e.message || String(e));
         console.error("runAnalysis error:", e);
     } finally {
+        clearInterval(aiProgressTimer);
         state.isRunning = false;
         toggleScanUI(false);
     }
@@ -1559,6 +1714,7 @@ function showAnalysisError(title, detail) {
     if (eq) eq.textContent = `Blocked by: ${title}. See Model Interpretation panel.`;
     const badge = dom.get("#aiBadge");
     if (badge) { badge.textContent = "ERROR"; badge.className = "badge muted"; }
+    renderTerminalSkills(state.lastAnalysisSkills, "Preview did not complete; research checks are not a current AI result.");
 }
 
 function buildLocalAiFallback(analysis, reason) {
@@ -1600,7 +1756,8 @@ function buildLocalAiFallback(analysis, reason) {
                 content: JSON.stringify(payload)
             }
         }],
-        fallbackUsed: true
+        fallbackUsed: true,
+        aiUsed: false
     };
 }
 
@@ -1966,7 +2123,7 @@ function renderAiUI(ai, analysis) {
     if (dom.get("#decisionLabel")) dom.get("#decisionLabel").textContent = hasConflict ? "⚠ CONFLICT — Stay Flat" : normalizedDirection;
     if (dom.get("#riskLabel"))     dom.get("#riskLabel").textContent = isFlat ? "Flat" : "Active";
     if (dom.get("#aiBadge")) {
-        dom.get("#aiBadge").textContent = hasConflict ? "CONFLICT" : "COMPLETE";
+        dom.get("#aiBadge").textContent = ai.fallbackUsed ? "AI UNAVAILABLE" : hasConflict ? "CONFLICT" : "COMPLETE";
     }
 
     // ── 2. Model Interpretation panel — branches on Conflict vs Stay Flat vs Active
@@ -2051,6 +2208,11 @@ function renderAiUI(ai, analysis) {
     }
 
     state.lastAiResult = { data, ai, analysis, direction: normalizedDirection };
+    const skills = ai.analysisSkills || state.lastAnalysisSkills;
+    if (skills) renderTerminalSkills(skills, ai.aiUsed === true
+      ? (ai.analysisSkills?.usedInPrompt ? "Research checks included in this AI request." : ai.analysisSkills ? "Research checks returned but were not added to AI context: unavailable data or prompt budget." : "Local research checks only; no server research receipt was returned.")
+      : "Local research evidence only — AI did not complete. This is not an AI trade plan.");
+    renderDebatePanel(ai);
 
     // ── 7. Scorecard panel
     const score = dom.get("#scorecardContent");
@@ -2063,7 +2225,7 @@ function renderAiUI(ai, analysis) {
             <div class="score-card"><p>Grade</p><strong style="color:${card.grade === 'Active' ? '#22c55e' : card.grade === 'Watch' ? '#f59e0b' : '#ef4444'}">${escapeHtml(card.grade)}</strong></div>
         `;
     }
-    if (dom.get("#scorecardBadge")) dom.get("#scorecardBadge").textContent = "VERIFIED";
+    if (dom.get("#scorecardBadge")) dom.get("#scorecardBadge").textContent = ai.fallbackUsed ? "RULE ENGINE" : "VERIFIED";
 }
 
 function normalizeScorecard(scorecard, analysis, isFlat) {
@@ -2127,99 +2289,9 @@ function parseSpecificAiFailureReason(status, message) {
         return "NVIDIA request timed out.";
     }
     if (status === 502 || text.includes("worker")) {
-        return "Cloudflare Worker timeout or gateway error.";
+        return message || "The AI provider could not complete this request.";
     }
     return message || `Server error ${status}`;
-}
-
-function showDebateCouncilModal() {
-    const lastResult = state.lastAiResult?.ai || {};
-    const debateResponses = lastResult.debateResponses || [];
-    const debateMetrics = lastResult.debateMetrics || [];
-    const debateConsensus = lastResult.debateConsensus || { buy: 0, sell: 0, wait: 0 };
-    const fallbackReason = lastResult.fallbackReason || "";
-
-    let modal = document.getElementById("debateCouncilModal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "debateCouncilModal";
-        modal.className = "modal-backdrop";
-        document.body.appendChild(modal);
-    }
-
-    let warningBanner = "";
-    if (fallbackReason === "Debate completed, but final synthesis failed.") {
-        warningBanner = `<div class="alert alert-warning" style="background:#451a03;border:1px solid #f59e0b;color:#fef3c7;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:0.85rem;">
-            ⚠️ <strong>Debate completed, but final synthesis failed.</strong> Individual debate participant responses are displayed below.
-        </div>`;
-    } else if (fallbackReason) {
-        warningBanner = `<div class="alert alert-info" style="background:#1e293b;border:1px solid #3b82f6;color:#93c5fd;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:0.85rem;">
-            ℹ️ <strong>Notice:</strong> ${escapeHtml(fallbackReason)}
-        </div>`;
-    }
-
-    let metricsHtml = "";
-    if (Array.isArray(debateMetrics) && debateMetrics.length > 0) {
-        metricsHtml = `<div style="margin-bottom:16px;">
-            <h5 style="margin:0 0 8px 0;font-size:0.9rem;color:var(--text-muted,#94a3b8);">Debate Model Status & Timings</h5>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:8px;">
-                ${debateMetrics.map(m => `
-                    <div style="background:var(--card-bg,#1e293b);padding:8px 12px;border-radius:6px;border:1px solid ${m.success ? '#22c55e44' : '#ef444444'};font-size:0.8rem;">
-                        <div style="font-weight:600;color:var(--text,#f8fafc);">${escapeHtml(m.modelLabel)}</div>
-                        <div style="color:var(--muted,#94a3b8);margin-top:2px;">
-                            Role: ${m.role} | ${m.success ? `<span style="color:#22c55e;">✓ ${m.durationMs}ms</span>` : `<span style="color:#ef4444;">✗ ${m.sanitizedError || 'Failed'}</span>`}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        </div>`;
-    }
-
-    let responsesHtml = "";
-    if (debateResponses.length > 0) {
-        responsesHtml = debateResponses.map(d => `
-            <div style="background:var(--card-bg,#1e293b);padding:12px;border-radius:8px;margin-bottom:10px;border:1px solid var(--border,#334155);">
-                <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                    <strong style="color:#38bdf8;">${escapeHtml(d.modelLabel || d.modelId)}</strong>
-                    <span style="font-size:0.75rem;padding:2px 6px;border-radius:4px;background:#334155;color:#f8fafc;">${escapeHtml(d.bias || "both").toUpperCase()}</span>
-                </div>
-                <div style="font-size:0.85rem;white-space:pre-wrap;color:#cbd5e1;line-height:1.4;">${escapeHtml(d.output || "No output")}</div>
-            </div>
-        `).join("");
-    } else {
-        responsesHtml = `<p style="color:var(--muted,#94a3b8);font-size:0.85rem;">No active debate participant responses recorded for this run.</p>`;
-    }
-
-    modal.innerHTML = `
-        <div class="modal-content" style="background:#0f172a;max-width:700px;width:90%;max-height:85vh;overflow-y:auto;padding:24px;border-radius:12px;border:1px solid #334155;color:#f8fafc;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10000;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-                <h3 style="margin:0;font-size:1.2rem;">🏛️ Debate Council Analysis</h3>
-                <button onclick="document.getElementById('debateCouncilModal').style.display='none'" style="background:none;border:none;color:#94a3b8;font-size:1.5rem;cursor:pointer;">&times;</button>
-            </div>
-            ${warningBanner}
-            <div style="display:flex;gap:12px;margin-bottom:16px;">
-                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
-                    <div style="font-size:0.75rem;color:#94a3b8;">BUY VOTES</div>
-                    <div style="font-size:1.2rem;font-weight:bold;color:#22c55e;">${debateConsensus.buy || 0}</div>
-                </div>
-                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
-                    <div style="font-size:0.75rem;color:#94a3b8;">SELL VOTES</div>
-                    <div style="font-size:1.2rem;font-weight:bold;color:#ef4444;">${debateConsensus.sell || 0}</div>
-                </div>
-                <div style="flex:1;background:#1e293b;padding:10px;border-radius:6px;text-align:center;">
-                    <div style="font-size:0.75rem;color:#94a3b8;">WAIT VOTES</div>
-                    <div style="font-size:1.2rem;font-weight:bold;color:#f59e0b;">${debateConsensus.wait || 0}</div>
-                </div>
-            </div>
-            ${metricsHtml}
-            <h4 style="margin:16px 0 8px 0;font-size:0.95rem;">Model Outputs</h4>
-            ${responsesHtml}
-            <div style="margin-top:20px;text-align:right;">
-                <button onclick="document.getElementById('debateCouncilModal').style.display='none'" style="background:#334155;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;">Close</button>
-            </div>
-        </div>
-    `;
-    modal.style.display = "block";
 }
 
 function normalizeGrade(value) {
@@ -3171,10 +3243,15 @@ window.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': state.sessionPassword || '' } });
             const data = await response.json();
-            if (!data.isAdmin) {
+            if (!data.isAdmin && state.sessionPassword) {
                 dom.setStatus("Backend admin auth mismatch. Settings are loading in read-only mode.");
             }
             const settings = data.settings || {};
+            // Trading settings stay on the edge. AI credentials/models use Vercel,
+            // the same server that handles both Chat Mode and AI Analysis.
+            const aiResponse = await fetch("/api/settings", { headers: { "x-admin-password": state.sessionPassword || "" } });
+            const aiSettings = (await aiResponse.json().catch(() => ({}))).settings || {};
+            for (const key of ["globalNvidiaApiKey", "globalNvidiaApiKeys", "nvidiaModels", "debateModels", "defaultModelKey"]) settings[key] = aiSettings[key];
             if (dom.get("#marketDataKeysInput")) dom.get("#marketDataKeysInput").value = (settings.twelveDataKeys || []).join("\n");
             if (dom.get("#optionsDataKeysInput")) dom.get("#optionsDataKeysInput").value = (settings.polygonKeys || []).join("\n");
             if (dom.get("#alphaVantageKeysInput")) dom.get("#alphaVantageKeysInput").value = (settings.alphaVantageKeys || []).join("\n");
@@ -3182,56 +3259,11 @@ window.addEventListener('DOMContentLoaded', () => {
             if (dom.get("#oandaApiTokenInput")) dom.get("#oandaApiTokenInput").value = settings.oandaApiToken || "";
             if (dom.get("#oandaAccountIdInput")) dom.get("#oandaAccountIdInput").value = settings.oandaAccountId || "";
             updateOandaTokenStatus(settings.oandaApiToken || "", Boolean(data.isAdmin));
-            const permittedModels = new Set([
-                "meta/llama-3.1-8b-instruct",
-                "meta/llama-3.3-70b-instruct",
-                "abacusai/dracarys-llama-3.1-70b-instruct",
-                "meta/llama-4-maverick-17b-128e-instruct",
-                "mistralai/mistral-nemotron",
-                "nvidia/llama-3.3-nemotron-super-49b-v1",
-                "google/gemma-3n-e2b-it",
-                "google/gemma-3n-e4b-it",
-                "meta/llama-3.2-3b-instruct",
-                "mistralai/ministral-14b-instruct-2512",
-                "mistralai/mistral-large-3-675b-instruct-2512",
-                "mistralai/mistral-medium-3.5-128b",
-                "mistralai/mistral-small-4-119b-2603",
-                "mistralai/mixtral-8x7b-instruct-v0.1",
-                "nvidia/llama-3.1-nemotron-nano-8b-v1",
-                "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-                "nvidia/nemotron-3-super-120b-a12b",
-                "nvidia/nemotron-mini-4b-instruct",
-                "nvidia/nemotron-nano-12b-v2-vl",
-                "qwen/qwen3-coder-480b-a35b-instruct",
-                "qwen/qwen3.5-397b-a17b",
-                "stockmark/stockmark-2-100b-instruct",
-                "upstage/solar-10.7b-instruct",
-                "bytedance/seed-oss-36b-instruct",
-                "deepseek-ai/deepseek-v4-flash",
-                "deepseek-ai/deepseek-v4-pro",
-                "google/gemma-4-31b-it",
-                "meta/llama-3.1-70b-instruct",
-                "meta/llama-3.2-1b-instruct",
-                "microsoft/phi-4-mini-instruct",
-                "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-                "nvidia/nemotron-3-ultra-550b-a55b",
-                "qwen/qwen3-next-80b-a3b-instruct",
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "nvidia/nvidia-nemotron-nano-9b-v2",
-                "nvidia/nemotron-3-nano-30b-a3b"
-            ]);
-
             if (Array.isArray(settings.nvidiaModels) && settings.nvidiaModels.length) {
                 state.models = settings.nvidiaModels
-                    .filter((model) => permittedModels.has(String(model.id || "").trim()))
                     .map((model) => {
                         let modelId = model.id;
                         let label = model.label;
-                        if (modelId === "openai/gpt-oss-120b") {
-                            modelId = "meta/llama-3.1-70b-instruct";
-                            label = "Main Summary Model (Llama 3.1 70B)";
-                        }
                         return {
                             key: model.key,
                             id: modelId,
@@ -3246,7 +3278,6 @@ window.addEventListener('DOMContentLoaded', () => {
             }
             if (Array.isArray(settings.debateModels) && settings.debateModels.length) {
                 state.debateModels = settings.debateModels
-                    .filter((model) => permittedModels.has(String(model.id || "").trim()))
                     .map((model) => {
                         return {
                             key: model.key,
@@ -3281,6 +3312,8 @@ window.addEventListener('DOMContentLoaded', () => {
             setCustomSelectValue("oandaEnvironmentSelect", state.oandaEnvironment);
         } catch (e) {
             console.error("Failed to load settings", e);
+        } finally {
+            await loadAiModelConfiguration(true).catch(error => dom.setStatus(`AI configuration: ${error.message}`));
         }
     }
 
@@ -3317,7 +3350,9 @@ window.addEventListener('DOMContentLoaded', () => {
     async function saveAdminSettings(key, value) {
         try {
             const body = typeof key === "object" ? key : { [key]: value };
-            const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, {
+            const aiFields = new Set(["globalNvidiaApiKey", "globalNvidiaApiKeys", "nvidiaModels", "debateModels", "defaultModelKey"]);
+            const aiOnly = Object.keys(body).every(field => aiFields.has(field));
+            const response = await fetch(aiOnly ? "/api/settings" : `${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, {
                 method: 'POST',
                 headers: { 'x-admin-password': state.sessionPassword || '', 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -3327,6 +3362,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 dom.setStatus(payload.message || "Failed to save settings.");
                 return false;
             }
+            if (aiOnly) await loadAiModelConfiguration(true);
             dom.setStatus("Settings saved successfully.");
             return true;
         } catch (e) {
@@ -3348,8 +3384,8 @@ window.addEventListener('DOMContentLoaded', () => {
             debateModels: state.debateModels,
             defaultModelKey: state.selectedModelKey
         });
-        window.syncAiBackendSettings = syncAiBackendSettings;
     }
+    window.syncAiBackendSettings = syncAiBackendSettings;
 
     const saveMarketKeysBtn = dom.get("#saveMarketKeysButton");
     if (saveMarketKeysBtn) saveMarketKeysBtn.onclick = () => {
@@ -3590,6 +3626,9 @@ function loadLocalSettings() {
                 });
             }
             if (parsed.debateModels && Array.isArray(parsed.debateModels)) state.debateModels = parsed.debateModels;
+            if (["off", "fast", "deep", "full"].includes(parsed.debateMode)) state.debateMode = parsed.debateMode;
+            if (typeof parsed.analysisSkillsEnabled === "boolean") state.analysisSkillsEnabled = parsed.analysisSkillsEnabled;
+            if (typeof parsed.analysisRiskBudget === "number" && Number.isFinite(parsed.analysisRiskBudget) && parsed.analysisRiskBudget > 0 && parsed.analysisRiskBudget <= 10000000) state.analysisRiskBudget = parsed.analysisRiskBudget;
             if (parsed.selectedModelKey) state.selectedModelKey = parsed.selectedModelKey;
             if (parsed.temperature !== undefined) state.temperature = parsed.temperature;
             if (parsed.candleCount) state.candleCount = parsed.candleCount;
@@ -3610,9 +3649,12 @@ function loadLocalSettings() {
 function saveLocalSettings() {
     try {
         const payload = {
-            models: state.models,
-            debateModels: state.debateModels,
+            models: state.models.map(({ apiKey, ...model }) => model),
+            debateModels: state.debateModels.map(({ apiKey, ...model }) => model),
             selectedModelKey: state.selectedModelKey,
+            debateMode: state.debateMode,
+            analysisSkillsEnabled: state.analysisSkillsEnabled,
+            analysisRiskBudget: state.analysisRiskBudget,
             temperature: state.temperature,
             candleCount: state.candleCount,
             botMode: state.botMode,
@@ -3763,9 +3805,19 @@ async function saveAdminSettings(key, value) {
 
 function initSettingsUI() {
     loadLocalSettings();
+    setupTerminalSkillsUI();
     renderModelDropdowns();
     setupModelManager(false);
     setupModelManager(true);
+    initCustomSelect("debateModeSelect", [
+        { value: "fast", label: "Fast · 3 perspectives · ≤8s debate wait" },
+        { value: "deep", label: "Deep · 4 perspectives · ≤14s debate wait" },
+        { value: "full", label: "Full · 6 perspectives · ≤20s debate wait" },
+        { value: "off", label: "Summary only · no debate" }
+    ], state.debateMode || "fast", value => {
+        state.debateMode = value;
+        saveLocalSettings();
+    });
 
     const botModeOptions = [
         { value: "manual", label: "Manual Only" },
@@ -3840,7 +3892,7 @@ function initSettingsUI() {
         importNvidiaBtn.disabled = true;
         setSettingsStatus("Fetching NVIDIA models...");
         try {
-            const res = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}?action=fetch-nvidia`, {
+            const res = await fetch("/api/settings?action=fetch-nvidia", {
                 method: 'POST',
                 headers: { 'x-admin-password': state.sessionPassword || '', 'Content-Type': 'application/json' },
                 body: JSON.stringify({ apiKey, baseUrl })
@@ -4194,88 +4246,148 @@ function showTrackerModal(stepName) {
   modal.setAttribute("aria-hidden", "false");
 }
 
-function setupDebateCouncilModal() {
-  const closeBtn = document.getElementById("closeDebateCouncilModal");
-  if (closeBtn) {
-    closeBtn.onclick = () => {
-      const modal = document.getElementById("debateCouncilModal");
-      if (modal) {
-        modal.style.display = "none";
-        modal.classList.remove("open");
-        modal.setAttribute("aria-hidden", "true");
+let debateActiveTab = "success";
+let debateReturnFocus = null;
+
+function debateEntries(ai = {}) {
+  return {
+    responses: Array.isArray(ai.debateResponses) ? ai.debateResponses : [],
+    failures: Array.isArray(ai.debateFailures) ? ai.debateFailures : (ai.debateMetrics || []).filter(entry => !entry.success)
+  };
+}
+
+function debateDuration(value) {
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms >= 0 ? ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s` : "time unavailable";
+}
+
+function renderDebatePanel(ai = {}) {
+  const { responses, failures } = debateEntries(ai);
+  const planned = ai.debatePlanned ?? ai.debateAttempted ?? responses.length;
+  const distinct = new Set(responses.map(entry => entry.modelId || entry.modelLabel)).size;
+  const modeLabel = ({ off: "Summary only", fast: "Fast", deep: "Deep", full: "Full" })[ai.debateMode] || "Debate";
+  const timing = ai.timings ? ` · debate ${debateDuration(ai.timings.debateMs)} · summary ${debateDuration(ai.timings.summaryMs)}` : "";
+  const summary = `${modeLabel} · ${responses.length}/${planned} perspectives · ${distinct} distinct model${distinct === 1 ? "" : "s"}${timing}`;
+  const votes = { buy: 0, sell: 0, wait: 0, unclassified: 0 };
+  responses.forEach(entry => votes[["buy", "sell", "wait"].includes(entry.vote) ? entry.vote : "unclassified"]++);
+  let notice = ai.debateNotice || (responses.length ? "Review each model's evidence; role counts are not independent model votes." : "No debate reviews returned. Choose a debate mode in Settings and run Analyze Market again.");
+  if (votes.unclassified) notice += ` ${votes.unclassified} review(s) had no explicit verdict and were not counted as votes.`;
+  if (failures.length) notice += ` ${failures.length} failed/skipped attempt(s); see details.`;
+  const panel = document.getElementById("consensusPanel");
+  if (panel) panel.style.display = "block";
+  const write = (id, text) => { const element = document.getElementById(id); if (element) element.textContent = text; };
+  write("debateRunSummary", summary);
+  write("debateModalSummary", `${summary}. ${notice}`);
+  write("debateRunNotice", notice);
+  write("debateBuyVotes", votes.buy);
+  write("debateSellVotes", votes.sell);
+  write("debateWaitVotes", votes.wait);
+  write("summaryDebateCount", `${responses.length}/${planned}`);
+  if (document.getElementById("debateCouncilModal")?.getAttribute("aria-hidden") === "false") renderDebateTab(debateActiveTab);
+}
+
+function renderDebateTab(tab) {
+  debateActiveTab = tab;
+  const ai = state.lastAiResult?.ai || {};
+  const { responses, failures } = debateEntries(ai);
+  const failedTab = tab === "failed";
+  for (const [id, selected, label] of [
+    ["tabDebateSuccess", !failedTab, `Success (${responses.length})`],
+    ["tabDebateFailed", failedTab, `Failed / skipped (${failures.length})`]
+  ]) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.textContent = label;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  }
+  const list = document.getElementById("debateModelList");
+  const name = document.getElementById("debateActiveModelName");
+  const output = document.getElementById("debateModelOutputContainer");
+  if (!list || !name || !output) return;
+  list.replaceChildren();
+  const entries = failedTab ? failures : responses;
+  name.textContent = failedTab ? "Failed / skipped attempts" : "Successful reviews";
+  output.textContent = failedTab ? "No failed or skipped attempts for this run." : ai.debateNotice || "No successful reviews yet. Run Analyze Market with debate enabled. Final analysis can still succeed when debate participants fail.";
+  entries.forEach((entry, index) => {
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "debate-model-item";
+    button.setAttribute("aria-pressed", "false");
+    const modelName = document.createElement("span");
+    modelName.className = "debate-model-name";
+    modelName.textContent = entry.modelLabel || entry.modelId || "Unnamed participant";
+    const role = ["bullish", "bearish", "redteam", "both"].includes(entry.bias || entry.role) ? entry.bias || entry.role : "both";
+    const badge = document.createElement("span");
+    badge.className = `debate-model-badge ${role}`;
+    badge.textContent = role === "both" ? "BALANCED" : role.toUpperCase();
+    const meta = document.createElement("span");
+    meta.className = "debate-model-meta";
+    meta.textContent = `${failedTab ? entry.skipped ? "Skipped" : `Failed (${entry.statusCode || entry.code || "error"})` : entry.modelFallbackUsed ? "Backup model used" : "Completed"} · ${debateDuration(entry.durationMs)}`;
+    button.append(modelName, badge, meta);
+    button.onclick = () => {
+      for (const item of list.querySelectorAll("button")) {
+        item.classList.toggle("active", item === button);
+        item.setAttribute("aria-pressed", String(item === button));
       }
+      name.textContent = `${entry.modelId || entry.modelLabel || "Participant"} · ${badge.textContent}`;
+      // Provider output and errors are always text, never executable HTML.
+      output.textContent = failedTab
+        ? `${meta.textContent}\n\n${entry.sanitizedError || entry.message || "This participant returned no usable review."}`
+        : `${entry.output || "No review text returned."}${entry.modelFallbackUsed ? `\n\nBackup used: ${entry.modelId}. Originally requested: ${entry.requestedModelId || "another model"}. See Failed / skipped for earlier attempts.` : ""}`;
     };
-  }
-  const viewDetailsBtn = document.getElementById("viewDebateDetailsButton");
-  if (viewDetailsBtn) {
-    viewDetailsBtn.onclick = () => showDebateCouncilModal();
-  }
+    li.appendChild(button);
+    list.appendChild(li);
+    if (index === 0) button.click();
+  });
+}
+
+function setupDebateCouncilModal() {
+  const modal = document.getElementById("debateCouncilModal");
+  if (!modal) return;
+  const close = () => {
+    modal.style.display = "none";
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    debateReturnFocus?.focus();
+  };
+  document.getElementById("closeDebateCouncilModal")?.addEventListener("click", close);
+  document.getElementById("viewDebateDetailsButton")?.addEventListener("click", showDebateCouncilModal);
+  document.getElementById("tabDebateSuccess")?.addEventListener("click", () => renderDebateTab("success"));
+  document.getElementById("tabDebateFailed")?.addEventListener("click", () => renderDebateTab("failed"));
+  modal.addEventListener("click", event => { if (event.target === modal) close(); });
+  modal.addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); close(); }
+    if (event.target.matches("[role=tab]") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const target = event.key === "Home" ? "tabDebateSuccess" : event.key === "End" ? "tabDebateFailed" : event.target.id === "tabDebateSuccess" ? "tabDebateFailed" : "tabDebateSuccess";
+      const button = document.getElementById(target);
+      button?.click();
+      button?.focus();
+    }
+    if (event.key === "Tab") {
+      const focusable = [...modal.querySelectorAll("button:not([disabled]):not([tabindex='-1'])")].filter(element => element.getClientRects().length);
+      const first = focusable[0], last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  });
 }
 
 function showDebateCouncilModal() {
   const modal = document.getElementById("debateCouncilModal");
-  const modelList = document.getElementById("debateModelList");
-  const activeModelName = document.getElementById("debateActiveModelName");
-  const outputContainer = document.getElementById("debateModelOutputContainer");
   if (!modal) return;
-
-  // Reset display
-  if (modelList) modelList.innerHTML = "";
-  if (activeModelName) activeModelName.textContent = "Select a model to view output";
-  if (outputContainer) outputContainer.textContent = "Choose a model from the left sidebar to display its response commentary here.";
-
-  const aiResult = state.lastAiResult || {};
-  const debateResponses = aiResult.ai?.debateResponses || [];
-
-  if (!debateResponses.length) {
-    if (outputContainer) {
-      if (aiResult.ai?.debateUsed === false) {
-        outputContainer.textContent = "No debate was conducted. Either only a single summary model was selected, or all debate models timed out/failed. Run a bot preview first with debate models enabled in Settings.";
-      } else {
-        outputContainer.textContent = "No active debate data found. Please run a bot preview first to execute the Arbiter Debate Council.";
-      }
-    }
-  } else {
-    // Populate list of models
-    debateResponses.forEach((resp, idx) => {
-      const li = document.createElement("li");
-      const biasLabel = String(resp.bias || "balanced").toUpperCase();
-      li.innerHTML = `
-        <button class="debate-model-item" data-index="${idx}">
-          <span class="debate-model-name">${escapeHtml(resp.modelLabel || resp.modelId)}</span>
-          <span class="debate-model-badge ${escapeHtml(resp.bias || 'balanced')}">${escapeHtml(biasLabel)}</span>
-        </button>
-      `;
-      modelList.appendChild(li);
-    });
-
-    // Add click listeners to items
-    const items = modelList.querySelectorAll(".debate-model-item");
-    items.forEach(btn => {
-      btn.onclick = () => {
-        // Toggle active class
-        items.forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-
-        const index = parseInt(btn.getAttribute("data-index"), 10);
-        const resp = debateResponses[index];
-        if (resp) {
-          activeModelName.textContent = `${resp.modelLabel || resp.modelId} (${String(resp.bias || 'balanced').toUpperCase()})`;
-          outputContainer.textContent = resp.output || "Empty response from model.";
-        }
-      };
-    });
-
-    // Automatically click first model in the list
-    if (items.length > 0) {
-      items[0].click();
-    }
-  }
-
-  // Toggle open
+  debateReturnFocus = document.activeElement;
+  const ai = state.lastAiResult?.ai || {};
+  renderDebatePanel(ai);
+  const { responses, failures } = debateEntries(ai);
+  renderDebateTab(!responses.length && failures.length ? "failed" : "success");
   modal.style.display = "grid";
   modal.classList.add("open");
   modal.setAttribute("aria-hidden", "false");
+  document.getElementById("closeDebateCouncilModal")?.focus();
 }
 
 // --- ICT Optimal Trade Entry (OTE) Fibonacci & Swing Deep-Dive Module ---

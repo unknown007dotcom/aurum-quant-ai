@@ -94,20 +94,9 @@ export async function fetchOptionsIntelligence() {
 export async function requestAiDecision(analysis) {
   const model = getSelectedModel();
   const payload = {
-    analysis,
-    model: {
-      id: model.id,
-      apiKey: model.apiKey,
-      baseUrl: model.baseUrl,
-      temperature: state.temperature,
-    },
-    debateModels: state.debateModels.map(m => ({
-      id: m.id,
-      apiKey: m.apiKey,
-      baseUrl: m.baseUrl,
-      isDebateParticipant: m.isDebateParticipant,
-      bias: m.bias
-    }))
+    prompt: typeof analysis?.prompt === "string" ? analysis.prompt : `Analyze the following supplied market data. Do not invent prices or execute orders.\n${JSON.stringify(analysis)}`,
+    selectedModelKey: model?.key || "", model: model?.id || "", temperature: state.temperature,
+    debateModels: state.debateModels.map(({ id, isDebateParticipant, bias }) => ({ id, isDebateParticipant, bias })),
   };
 
   const response = await fetch(APP_CONFIG.aiChatPath, {

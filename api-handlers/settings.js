@@ -2,6 +2,7 @@ const { getAdminSettings, setAdminSettings, getFirestore } = require("../lib/fir
 const { applyOandaCredentialGuard } = require("../lib/oanda-settings-guard");
 
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const nvidia = import("../lib/nvidia-runtime.mjs");
 
 module.exports = async function handler(req, res) {
   const method = req.method;
@@ -39,7 +40,7 @@ module.exports = async function handler(req, res) {
 
   if (method === "POST") {
     if (!isAdmin) {
-      return res.status(401).json({ message: "Unauthorized." });
+      return res.status(401).json({ message: adminPassword ? "Unauthorized." : "AI settings are locked. Configure ADMIN_PASSWORD in Vercel to edit them, or set NVIDIA_API_KEY directly in Vercel." });
     }
 
     const body = await getRequestBody(req);
@@ -48,9 +49,17 @@ module.exports = async function handler(req, res) {
       return handleFetchNvidia(body, res);
     }
 
+    if (action === "clear-ai-credentials") {
+      if (body.confirm !== true) return res.status(400).json({ message: "Explicit confirmation is required." });
+      const current = (await getAdminSettings()) || {};
+      await setAdminSettings({ globalNvidiaApiKey: "", globalNvidiaApiKeys: [], nvidiaModels: (current.nvidiaModels || []).map(model => ({ ...model, apiKey: "" })), debateModels: (current.debateModels || []).map(model => ({ ...model, apiKey: "" })) });
+      return res.status(200).json({ ok: true });
+    }
+    const { preserveAiCredentials } = await import("../lib/ai-settings.mjs");
+    const current = (await getAdminSettings()) || {};
     // Never let an empty OANDA field wipe the saved token/account ID.
     // Deletion requires an explicit clear flag (see lib/oanda-settings-guard).
-    await setAdminSettings(applyOandaCredentialGuard(body || {}));
+    await setAdminSettings(applyOandaCredentialGuard(preserveAiCredentials(current, body || {})));
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ ok: true });
   }
@@ -59,112 +68,19 @@ module.exports = async function handler(req, res) {
 };
 
 async function handleFetchNvidia(body, res) {
-  const apiKey = String(body.apiKey || "").trim();
-  const baseUrl = String(body.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
-
-  if (!apiKey) return res.status(400).json({ message: "Missing NVIDIA API key." });
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  const { discoverModels, checkNvidiaHealth, NvidiaError, secureBaseUrl } = await nvidia;
   try {
-    const response = await fetch(`${baseUrl}/models`, {
-      method: "GET",
-      headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) return res.status(response.status).json({ message: payload?.error?.message || payload?.message || `NVIDIA HTTP ${response.status}` });
-    
-    const data = Array.isArray(payload?.data) ? payload.data : [];
-    const models = data
-      .map((item) => ({ id: String(item?.id || "").trim(), label: String(item?.id || "").trim() }))
-      .filter((item) => item.id);
-
-    const smokeModel = pickNvidiaSmokeTestModel(models);
-    if (!smokeModel) {
-      return res.status(502).json({ message: "NVIDIA returned a catalog, but no chat-capable model was found to validate this key." });
-    }
-
-    const smoke = await validateNvidiaChatAccess({ apiKey, baseUrl, modelId: smokeModel.id, signal: controller.signal });
-    if (!smoke.ok) {
-      return res.status(smoke.statusCode || 502).json({
-        message: smoke.message || "NVIDIA key could fetch models but failed a chat validation request.",
-        validationModel: smokeModel.id,
-      });
-    }
-    
-    res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json({ models, count: models.length, baseUrl, validated: true, validationModel: smokeModel.id });
+    const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    if (!apiKey) return res.status(400).json({ message: "Missing NVIDIA API key." });
+    const baseUrl = secureBaseUrl(body.baseUrl || DEFAULT_BASE_URL);
+    const candidateSettings = { nvidiaModels: [{ key: "validation", id: "openai/gpt-oss-20b", apiKey, baseUrl }] };
+    const runtime = await discoverModels(candidateSettings);
+    const health = await checkNvidiaHealth(candidateSettings);
+    if (!health.completionVerified) return res.status(502).json({ message: health.error, validated: false });
+    const models = runtime.models.map(({ id, label }) => ({ id, label }));
+    return res.status(200).json({ models, count: models.length, baseUrl, validated: true, validationModel: health.selectedModel });
   } catch (error) {
-    if (error?.name === "AbortError") {
-      return res.status(504).json({ message: "NVIDIA model import timed out. Check the key, network, or try again." });
-    }
-    return res.status(502).json({ message: error?.message || "Failed to fetch NVIDIA models." });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function pickNvidiaSmokeTestModel(models) {
-  const list = Array.isArray(models) ? models : [];
-  // Prefer smaller models for smoke test — gpt-oss-120b returns empty content
-  // with low max_tokens causing false key-validation failures.
-  const preferred = [
-    "meta/llama-3.1-8b-instruct",
-    "mistralai/mistral-7b-instruct-v0.3",
-    "meta/llama-3.1-70b-instruct",
-    "meta/llama-3.3-70b-instruct",
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-  ];
-  return preferred.map((id) => list.find((model) => model.id === id)).find(Boolean) ||
-    list.find((model) => /(?:instruct|chat|gpt-oss)/i.test(model.id));
-}
-
-async function validateNvidiaChatAccess({ apiKey, baseUrl, modelId, signal }) {
-  try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: modelId,
-        temperature: 0.1,
-        // Use 32 tokens — 4 was too low and caused NVIDIA to return
-        // "model output must contain either output text or tool calls"
-        // which incorrectly failed key validation.
-        max_tokens: 32,
-        stream: false,
-        messages: [
-          { role: "system", content: "You are a helpful assistant. Always respond with a short text answer." },
-          { role: "user", content: "Say the word 'OK' and nothing else." },
-        ],
-      }),
-      signal,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const errMsg = payload?.error?.message || payload?.message || `NVIDIA chat validation HTTP ${response.status}`;
-      // If we get the "empty output" error, the key itself is valid —
-      // the model just returned no tokens. Treat this as success.
-      if (/model output must contain|output text or tool calls/i.test(errMsg)) {
-        return { ok: true };
-      }
-      return {
-        ok: false,
-        statusCode: response.status,
-        message: errMsg,
-      };
-    }
-    return { ok: true };
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      return { ok: false, statusCode: 504, message: "NVIDIA chat validation timed out." };
-    }
-    return { ok: false, statusCode: 502, message: error?.cause?.code ? `${error.message} (${error.cause.code})` : error?.message };
+    return res.status(error instanceof NvidiaError ? error.status : 502).json({ message: error instanceof NvidiaError ? error.message : "NVIDIA model import failed." });
   }
 }
 

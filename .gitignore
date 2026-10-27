@@ -16,3 +16,5 @@ cloudflare-backend/.wrangler/
 .wrangler/
 aurum-server.err.log
 aurum-server.out.log
+
+data/settings.local.json

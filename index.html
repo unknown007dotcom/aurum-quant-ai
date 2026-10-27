@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=29">
+  <link rel="stylesheet" href="./styles.css?v=32">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -47,6 +47,10 @@
         </div>
       </div>
       <div class="hero-actions">
+        <a id="chatModeButton" class="ghost-button chat-mode-button" href="./chat.html">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 2V11.5A8.5 8.5 0 0 1 9.5 3h3a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 9h8M7 13h5"/></svg>
+          Chat Mode
+        </a>
         <button id="settingsToggle" class="ghost-button" type="button">Settings</button>
       </div>
     </header>
@@ -375,6 +379,35 @@
 
 
 
+      <section id="analysisSkillsPanel" class="panel analysis-skills-panel" aria-labelledby="analysisSkillsTitle">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Bounded research checks · main analysis only</p>
+            <h2 id="analysisSkillsTitle">Analysis skills</h2>
+          </div>
+          <span id="analysisSkillsBadge" class="badge muted">Not run</span>
+        </div>
+        <div class="analysis-skills-controls">
+          <label class="analysis-skills-toggle"><input id="analysisSkillsEnabled" type="checkbox" checked> Include research checks in AI analysis</label>
+          <label class="analysis-skills-budget" for="analysisRiskBudget">Optional hypothetical risk budget (USD)
+            <input id="analysisRiskBudget" type="number" inputmode="decimal" min="0.01" max="10000000" step="any" placeholder="Not supplied" aria-describedby="analysisSkillsControlNote">
+          </label>
+        </div>
+        <p id="analysisSkillsControlNote" class="status-text">Controls apply to the next preview. This is not your broker balance or an order setting.</p>
+        <p id="analysisSkillsRunStatus" class="status-text" role="status">Checks populate from the next market snapshot; no extra AI calls.</p>
+        <div id="analysisSkillsMetrics" class="analysis-skills-metrics"></div>
+        <ul id="analysisSkillsIssues" class="analysis-skills-issues"></ul>
+        <p id="analysisSkillsValidation" class="analysis-skills-validation">Walk-forward / backtest: not run. No win-rate or profitability estimate is inferred from a snapshot.</p>
+        <p id="analysisSkillsDataNote" class="status-text">At most 256 submitted candles are audited. No missing candles are fabricated.</p>
+        <details class="analysis-skills-source">
+          <summary>What is included · source and limitations</summary>
+          <p>Selected adaptations: OHLC data quality, ATR volatility, gross reward/risk review, hypothetical sizing, and walk-forward readiness. Not all 68 skills or their Python tools are installed.</p>
+          <p>No crypto risk presets, demo account balances, 365-day annualization, automated orders or trading-control changes. Gross calculations exclude spread, slippage, financing, broker size limits and margin checks.</p>
+          <a href="https://github.com/agiprolabs/claude-trading-skills/tree/981e1d736cdc02bdc1c55c74ec9224e956414706" target="_blank" rel="noopener noreferrer">AGIPro reference · pinned revision 981e1d7</a>
+          <span aria-hidden="true"> · </span><a href="./assets/licenses/claude-trading-skills-MIT.txt" target="_blank" rel="noopener noreferrer">MIT license</a>
+        </details>
+      </section>
+
       <section class="panel scorecard-panel">
         <div class="panel-head">
           <div>
@@ -396,9 +429,13 @@
           </div>
           <button id="viewDebateDetailsButton" class="ghost-button" type="button" style="padding: 6px 12px; font-size: 0.8rem; border-radius: 8px;">View Details</button>
         </div>
-        <div id="consensusChartContainer" class="chart-container" style="height: 250px; margin: 20px auto; position: relative;">
-          <canvas id="consensusChart"></canvas>
+        <p id="debateRunSummary" class="status-text" role="status">Awaiting a completed analysis.</p>
+        <div class="debate-votes" aria-label="Explicit participant verdicts">
+          <div><span>Buy</span><strong id="debateBuyVotes">0</strong></div>
+          <div><span>Sell</span><strong id="debateSellVotes">0</strong></div>
+          <div><span>Wait</span><strong id="debateWaitVotes">0</strong></div>
         </div>
+        <p id="debateRunNotice" class="status-text"></p>
       </section>
 
       <section id="lifecyclePanel" class="panel lifecycle-panel">
@@ -575,9 +612,10 @@
         <div id="modelSelect" class="custom-select"></div>
       </label>
 
-      <label class="field admin-only">
+      <label class="field">
         <span>Debate Mode</span>
         <div id="debateModeSelect" class="custom-select"></div>
+        <small class="status-text">Fast uses a small, low-latency council. Deep/Full try more configured models. The limit covers debate only; final analysis follows. Saved for this browser.</small>
       </label>
 
       <div class="settings-divider admin-only"></div>
@@ -761,21 +799,22 @@
   </aside>
 
   <!-- Debate Council Details Popup -->
-  <aside id="debateCouncilModal" class="password-modal" style="display: none;" aria-hidden="true">
+  <aside id="debateCouncilModal" class="password-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="debateCouncilModalTitle" aria-describedby="debateModalSummary" aria-hidden="true">
     <div class="password-card tracker-card" style="max-width: 750px; width: min(750px, 100%);">
       <div class="panel-head">
         <div>
           <p class="panel-kicker" id="debateCouncilModalKicker">Arbiter Debate Council</p>
-          <h2 id="debateCouncilModalTitle">Participating Models</h2>
+          <h2 id="debateCouncilModalTitle">Review perspectives</h2>
         </div>
-        <button id="closeDebateCouncilModal" class="ghost-button" type="button" style="padding: 4px 12px; font-size: 1.1rem; border-radius: 8px;">×</button>
+        <button id="closeDebateCouncilModal" class="ghost-button" type="button" aria-label="Close debate details" style="padding: 4px 12px; font-size: 1.1rem; border-radius: 8px;">×</button>
       </div>
+      <p id="debateModalSummary" class="status-text"></p>
       <div class="debate-modal-layout" style="margin-top: 1.25rem;">
         <!-- Left Column: List of Models -->
         <div class="debate-models-sidebar">
-          <div class="debate-tabs">
-            <button id="tabDebateSuccess" class="debate-tab-btn active" type="button">SUCCESS</button>
-            <button id="tabDebateFailed" class="debate-tab-btn" type="button">FAILED</button>
+          <div class="debate-tabs" role="tablist" aria-label="Debate results">
+            <button id="tabDebateSuccess" class="debate-tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="debateModelList">SUCCESS</button>
+            <button id="tabDebateFailed" class="debate-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="debateModelList" tabindex="-1">FAILED</button>
           </div>
           <ul id="debateModelList" style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
             <!-- Model list dynamically populated -->
@@ -812,6 +851,6 @@
     </div>
   </aside>
 
-  <script src="./app.js?v=36"></script>
+  <script src="./app.js?v=40"></script>
 </body>
 </html>
