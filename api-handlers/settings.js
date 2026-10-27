@@ -1,4 +1,5 @@
 const { getAdminSettings, setAdminSettings, getFirestore } = require("../lib/firebase-admin");
+const { applyOandaCredentialGuard } = require("../lib/oanda-settings-guard");
 
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
@@ -47,7 +48,9 @@ module.exports = async function handler(req, res) {
       return handleFetchNvidia(body, res);
     }
 
-    await setAdminSettings(body || {});
+    // Never let an empty OANDA field wipe the saved token/account ID.
+    // Deletion requires an explicit clear flag (see lib/oanda-settings-guard).
+    await setAdminSettings(applyOandaCredentialGuard(body || {}));
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ ok: true });
   }
@@ -236,6 +239,8 @@ function sanitizePublicSettings(settings) {
     botEnabled: Boolean(settings.botEnabled),
     botInstrument: String(settings.botInstrument || "XAU_USD"),
     oandaEnvironment: String(settings.oandaEnvironment || "practice"),
+    // Safe for non-admins: whether a token exists, never the token itself.
+    oandaConfigured: Boolean(String(settings.oandaApiToken || "").trim() || process.env.OANDA_API_TOKEN),
     botUnits: Number.isFinite(Number(settings.botUnits)) ? Number(settings.botUnits) : 10,
     botStopLossOffset: Number.isFinite(Number(settings.botStopLossOffset)) ? Number(settings.botStopLossOffset) : 3,
     botTakeProfitOffset: Number.isFinite(Number(settings.botTakeProfitOffset)) ? Number(settings.botTakeProfitOffset) : 6,

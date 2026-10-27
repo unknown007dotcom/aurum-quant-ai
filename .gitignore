@@ -1,5 +1,11 @@
 node_modules/
 .env
+.env.*
+!.env.example
+# Local admin settings incl. the OANDA token. Ignoring only prevents NEW
+# copies from being committed; it does not delete or untrack the existing
+# file — never delete data/settings.json while developing.
+data/settings.json
 .vercel
 logs/
 *.log

@@ -381,7 +381,22 @@ async function handleSettings(request, env) {
   if (action === "fetch-nvidia") {
     return handleFetchNvidia(body);
   }
+  // Never let an empty OANDA field wipe the saved token/account ID (the
+  // admin form can submit "" just because the password field had not loaded
+  // yet). Deletion requires an explicit clear flag. Keep in sync with
+  // lib/oanda-settings-guard.js used by the Node/Vercel handlers.
+  const clearOandaToken = body.clearOandaApiToken === true || body.clearOandaCredentials === true;
+  const clearOandaAccountId = body.clearOandaAccountId === true || body.clearOandaCredentials === true;
   const next = { ...settings, ...body };
+  delete next.clearOandaApiToken;
+  delete next.clearOandaAccountId;
+  delete next.clearOandaCredentials;
+  next.oandaApiToken = clearOandaToken
+    ? ""
+    : String(body.oandaApiToken || "").trim() || String(settings.oandaApiToken || "");
+  next.oandaAccountId = clearOandaAccountId
+    ? ""
+    : String(body.oandaAccountId || "").trim() || String(settings.oandaAccountId || "");
   await saveSettings(env, next);
   return { ok: true };
 }
@@ -1597,6 +1612,8 @@ function sanitizePublicSettings(settings) {
     botEnabled: Boolean(settings.botEnabled),
     botInstrument: normalizeInstrument(settings.botInstrument || DEFAULT_INSTRUMENT),
     oandaEnvironment: normalizeEnvironment(settings.oandaEnvironment || "practice"),
+    // Safe for non-admins: whether a token exists, never the token itself.
+    oandaConfigured: Boolean(String(settings.oandaApiToken || "").trim()),
     botUnits: clampInt(settings.botUnits, 10, 1, 1000000),
     botStopLossOffset: normalizeNumber(settings.botStopLossOffset, 3),
     botTakeProfitOffset: normalizeNumber(settings.botTakeProfitOffset, 6),

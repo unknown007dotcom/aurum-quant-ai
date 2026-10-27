@@ -370,6 +370,30 @@ body::before {
   margin-top: 18px;
 }
 
+.secret-field-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.secret-field-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.secret-field-row button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.danger-button {
+  color: #ff8a8a;
+}
+
+:root[data-theme="light"] .danger-button {
+  color: #b3261e;
+}
+
 input,
 select,
 button,

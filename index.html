@@ -522,16 +522,22 @@
         </div>
         <label class="field">
           <span>OANDA API Token (Bearer Token)</span>
-          <input id="oandaApiTokenInput" type="password" placeholder="Paste your OANDA API token here">
+          <span class="secret-field-row">
+            <input id="oandaApiTokenInput" type="password" placeholder="Paste your OANDA API token here" autocomplete="off" spellcheck="false">
+            <button id="toggleOandaTokenVisibilityButton" class="ghost-button" type="button" aria-pressed="false" aria-label="Show OANDA API token">Show</button>
+            <button id="copyOandaTokenButton" class="ghost-button" type="button">Copy</button>
+          </span>
         </label>
+        <p id="oandaTokenStatus" class="status-text" role="status">OANDA token status loads after admin sign-in.</p>
         <label class="field">
           <span>OANDA Account ID (Optional)</span>
-          <input id="oandaAccountIdInput" type="text" placeholder="Auto-discovered if left blank">
+          <input id="oandaAccountIdInput" type="text" placeholder="Auto-discovered if left blank" autocomplete="off" spellcheck="false">
         </label>
         <div class="actions">
           <button id="saveOandaKeysButton" class="primary-button" type="button">Save OANDA Keys</button>
+          <button id="clearOandaKeysButton" class="ghost-button danger-button" type="button">Remove Saved OANDA Keys</button>
         </div>
-        <p class="status-text">Your API token is securely persisted on the Cloudflare KV store and never exposed publicly.</p>
+        <p class="status-text">Your API token is securely persisted on the Cloudflare KV store and never exposed publicly. Only a signed-in admin can view it with Show. Saving with an empty field never deletes the saved token &mdash; use Remove Saved OANDA Keys if you really want to delete it.</p>
       </div>
 
       <div class="admin-box admin-only">

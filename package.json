@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "publish": "wrangler publish",
-    "test": "node tests/analysis-engine.test.js",
+    "test": "node tests/analysis-engine.test.js && node tests/oanda-settings-guard.test.js",
     "check-build": "wrangler deploy --dry-run"
   },
   "dependencies": {

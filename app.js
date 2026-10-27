@@ -3153,6 +3153,20 @@ window.addEventListener('DOMContentLoaded', () => {
     if (closeBtn) closeBtn.onclick = () => dom.get("#settingsPanel").classList.remove("open");
 
     // --- Wire Admin Settings API ---
+    function updateOandaTokenStatus(token, isAdmin) {
+        const statusEl = dom.get("#oandaTokenStatus");
+        if (!statusEl) return;
+        const value = String(token || "").trim();
+        if (value) {
+            const hint = value.length >= 4 ? `••••${value.slice(-4)}` : "••••";
+            statusEl.textContent = `✓ OANDA token saved (${hint}). Use Show to view it or Copy to copy it.`;
+        } else if (isAdmin) {
+            statusEl.textContent = "No OANDA token saved yet — paste your token above and choose Save OANDA Keys.";
+        } else {
+            statusEl.textContent = "Sign in as admin to view the saved OANDA token.";
+        }
+    }
+
     async function loadAdminSettings() {
         try {
             const response = await fetch(`${EDGE_API_BASE}${APP_CONFIG.settingsPath}`, { headers: { 'x-admin-password': state.sessionPassword || '' } });
@@ -3167,6 +3181,7 @@ window.addEventListener('DOMContentLoaded', () => {
             if (dom.get("#globalNvidiaApiKeysInput")) dom.get("#globalNvidiaApiKeysInput").value = Array.isArray(settings.globalNvidiaApiKeys) && settings.globalNvidiaApiKeys.length ? settings.globalNvidiaApiKeys.join("\n") : (settings.globalNvidiaApiKey || "");
             if (dom.get("#oandaApiTokenInput")) dom.get("#oandaApiTokenInput").value = settings.oandaApiToken || "";
             if (dom.get("#oandaAccountIdInput")) dom.get("#oandaAccountIdInput").value = settings.oandaAccountId || "";
+            updateOandaTokenStatus(settings.oandaApiToken || "", Boolean(data.isAdmin));
             const permittedModels = new Set([
                 "meta/llama-3.1-8b-instruct",
                 "meta/llama-3.3-70b-instruct",
@@ -3364,11 +3379,87 @@ window.addEventListener('DOMContentLoaded', () => {
         await syncAiBackendSettings();
     };
 
+    // --- OANDA credentials: view / copy / save / remove ---
+    // Saving with an empty field must NEVER delete the saved token. Only the
+    // explicit Remove button (with confirmation) may clear it, and both
+    // backends enforce the same rule server-side.
+    let oandaTokenRevealTimer = null;
+    function setOandaTokenVisible(visible) {
+        const input = dom.get("#oandaApiTokenInput");
+        const toggleBtn = dom.get("#toggleOandaTokenVisibilityButton");
+        if (!input || !toggleBtn) return;
+        input.type = visible ? "text" : "password";
+        toggleBtn.textContent = visible ? "Hide" : "Show";
+        toggleBtn.setAttribute("aria-pressed", visible ? "true" : "false");
+        toggleBtn.setAttribute("aria-label", visible ? "Hide OANDA API token" : "Show OANDA API token");
+        if (oandaTokenRevealTimer) clearTimeout(oandaTokenRevealTimer);
+        if (visible) {
+            // Re-mask automatically so the token is not left on screen.
+            oandaTokenRevealTimer = setTimeout(() => setOandaTokenVisible(false), 60000);
+        }
+    }
+
+    const toggleOandaTokenBtn = dom.get("#toggleOandaTokenVisibilityButton");
+    if (toggleOandaTokenBtn) toggleOandaTokenBtn.onclick = () => {
+        const input = dom.get("#oandaApiTokenInput");
+        if (!input) return;
+        if (input.type === "password" && !(input.value || "").trim()) {
+            dom.setStatus("No OANDA token to show yet — sign in as admin so the saved token loads, or paste a token first.");
+            return;
+        }
+        setOandaTokenVisible(input.type === "password");
+    };
+
+    const copyOandaTokenBtn = dom.get("#copyOandaTokenButton");
+    if (copyOandaTokenBtn) copyOandaTokenBtn.onclick = async () => {
+        const input = dom.get("#oandaApiTokenInput");
+        const token = (input?.value || "").trim();
+        if (!token) {
+            dom.setStatus("No OANDA token to copy yet.");
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(token);
+            dom.setStatus("OANDA API token copied to clipboard.");
+        } catch {
+            setOandaTokenVisible(true);
+            input.select();
+            dom.setStatus("Clipboard unavailable — token is shown and selected, copy it manually.");
+        }
+    };
+
     const saveOandaKeysBtn = dom.get("#saveOandaKeysButton");
     if (saveOandaKeysBtn) saveOandaKeysBtn.onclick = async () => {
         const token = (dom.get("#oandaApiTokenInput")?.value || "").trim();
         const accountId = (dom.get("#oandaAccountIdInput")?.value || "").trim();
-        await saveAdminSettings({ oandaApiToken: token, oandaAccountId: accountId });
+        // Only send fields that actually have a value, so a blank field can
+        // never overwrite (delete) what is already saved.
+        const payload = {};
+        if (token) payload.oandaApiToken = token;
+        if (accountId) payload.oandaAccountId = accountId;
+        if (!Object.keys(payload).length) {
+            dom.setStatus("Nothing to save — the saved OANDA token was left untouched. Use Remove Saved OANDA Keys if you want to delete it.");
+            return;
+        }
+        const saved = await saveAdminSettings(payload);
+        if (saved) {
+            setOandaTokenVisible(false);
+            updateOandaTokenStatus(token || dom.get("#oandaApiTokenInput")?.value || "", true);
+        }
+    };
+
+    const clearOandaKeysBtn = dom.get("#clearOandaKeysButton");
+    if (clearOandaKeysBtn) clearOandaKeysBtn.onclick = async () => {
+        const confirmed = window.confirm("Remove the saved OANDA API token and account ID? The bot and live pricing will stop working until you save a token again. This cannot be undone.");
+        if (!confirmed) return;
+        const saved = await saveAdminSettings({ clearOandaCredentials: true });
+        if (saved) {
+            if (dom.get("#oandaApiTokenInput")) dom.get("#oandaApiTokenInput").value = "";
+            if (dom.get("#oandaAccountIdInput")) dom.get("#oandaAccountIdInput").value = "";
+            setOandaTokenVisible(false);
+            updateOandaTokenStatus("", true);
+            dom.setStatus("Saved OANDA keys removed.");
+        }
     };
 
     const saveBotConfigBtn = dom.get("#saveBotConfigButton");
