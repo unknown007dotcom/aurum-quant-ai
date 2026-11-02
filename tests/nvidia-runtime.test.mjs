@@ -288,7 +288,13 @@ const sseResponse = (chunks) =>
     { headers: { "content-type": "text/event-stream" } },
   );
 const hangingSseResponse = () =>
-  new Response(new ReadableStream({ start() {} }), {
+  new Response(new ReadableStream({ start(controller) {
+    // A stream stalled AFTER visible output, not a cold model awaiting its
+    // first answer (which now has its own startup window).
+    controller.enqueue(new TextEncoder().encode(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Partial answer" } }] })}\n\n`,
+    ));
+  } }), {
     headers: { "content-type": "text/event-stream" },
   });
 

@@ -494,3 +494,42 @@ test("Worker streams the same public protocol without waiting for the entire gen
     globalThis.fetch = realFetch;
   }
 });
+
+test("browser JSON and SSE errors preserve only safe timeout diagnostics", async () => {
+  for (const timeoutPhase of ["first_token", "idle", "deadline"]) {
+    const payload = {
+      code: "timeout",
+      timeoutPhase,
+      message: "Please retry.",
+      apiKey: "PRIVATE",
+      failures: [{ internal: "PRIVATE" }],
+    };
+    for (const response of [
+      Response.json(payload, { status: 504 }),
+      sse(event("error", payload)),
+    ])
+      await assert.rejects(readChatResponse(response), (error) => {
+        assert.equal(error.code, "timeout");
+        assert.equal(error.timeoutPhase, timeoutPhase);
+        assert.equal(error.message, "Please retry.");
+        assert.equal(error.apiKey, undefined);
+        assert.equal(error.failures, undefined);
+        return true;
+      });
+  }
+  await assert.rejects(
+    readChatResponse(
+      sse(
+        event("error", {
+          code: "https://private-provider.example/?key=PRIVATE",
+          timeoutPhase: "PRIVATE",
+        }),
+      ),
+    ),
+    (error) => {
+      assert.equal(error.code, undefined);
+      assert.equal(error.timeoutPhase, undefined);
+      return true;
+    },
+  );
+});

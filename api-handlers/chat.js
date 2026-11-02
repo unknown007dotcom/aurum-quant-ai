@@ -3,6 +3,11 @@ const { getAdminSettings } = require("../lib/firebase-admin");
 const service = import("../lib/chat-service.mjs");
 const streaming = import("../lib/chat-stream.mjs");
 
+// The runtime constructs this allowlisted record: model/code/status/timing only.
+// Never log requests, credentials, provider bodies, reasoning, or answer text.
+const logAttemptFailure = (failure) =>
+  console.warn("[chat-provider-attempt]", JSON.stringify(failure));
+
 async function streamReply(req, res, body, settings) {
   const { createChatStream, CHAT_STREAM_HEADERS } = await streaming;
   // The browser may have stopped while server settings were loading.
@@ -15,6 +20,7 @@ async function streamReply(req, res, body, settings) {
     globalThis.fetch,
     {
       signal: controller.signal,
+      onAttemptFailure: logAttemptFailure,
     },
   ).getReader();
   const disconnect = () => {
@@ -76,7 +82,9 @@ module.exports = async function handler(req, res) {
     const payload =
       req.method === "GET"
         ? await activeChatConfiguration(settings, process.env)
-        : await completeChat(body, settings, process.env);
+        : await completeChat(body, settings, process.env, globalThis.fetch, {
+            onAttemptFailure: logAttemptFailure,
+          });
     return res.status(200).json(payload);
   } catch (error) {
     if (res.destroyed || res.writableEnded) return;
@@ -88,6 +96,9 @@ module.exports = async function handler(req, res) {
     }
     return res.status(error instanceof ChatError ? error.status : 500).json({
       code: error.code || "provider_error",
+      ...(error instanceof ChatError && error.timeoutPhase
+        ? { timeoutPhase: error.timeoutPhase }
+        : {}),
       message:
         error instanceof ChatError
           ? error.message

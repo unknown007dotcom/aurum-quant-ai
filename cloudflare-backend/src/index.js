@@ -276,13 +276,16 @@ async function handleChatResponse(request, env) {
     let body;
     try { body = JSON.parse(text); } catch { throw new ChatError("Send a valid JSON chat request."); }
     validateChatRequest(body);
+    const onAttemptFailure = (failure) => console.warn("[chat-provider-attempt]", JSON.stringify(failure));
     if (body.stream === true)
-      return new Response(createChatStream(body, settings, env, globalThis.fetch, { signal: request.signal }), {
+      return new Response(createChatStream(body, settings, env, globalThis.fetch, { signal: request.signal, onAttemptFailure }), {
         headers: { ...corsHeaders(request), ...CHAT_STREAM_HEADERS },
       });
-    return jsonResponse(await completeChat(body, settings, env), request);
+    return jsonResponse(await completeChat(body, settings, env, globalThis.fetch, { signal: request.signal, onAttemptFailure }), request);
   } catch (error) {
     return jsonResponse({
+      code: error instanceof ChatError ? error.code || "provider_error" : "provider_error",
+      ...(error instanceof ChatError && error.timeoutPhase ? { timeoutPhase: error.timeoutPhase } : {}),
       message: error instanceof ChatError ? error.message : "Chat is temporarily unavailable. Please try again.",
     }, request, error instanceof ChatError ? error.status : 500);
   }

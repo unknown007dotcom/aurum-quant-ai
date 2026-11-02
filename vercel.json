@@ -10,5 +10,5 @@
     }
   ],
   "framework": null,
-  "buildCommand": "npm run build:vercel"
+  "buildCommand": "AURUM_VERIFY_CHAT_BASELINE_ORIGIN=https://aurum-quant-ai.vercel.app AURUM_VERIFY_LIVE_CHAT_STREAM=1 npm run build:vercel"
 }

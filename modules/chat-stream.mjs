@@ -84,6 +84,19 @@ const publicReply = (payload) => {
   };
 };
 
+function publicChatError(payload, fallback) {
+  const error = new Error(
+    typeof payload?.message === "string"
+      ? payload.message.slice(0, 500)
+      : fallback,
+  );
+  if (typeof payload?.code === "string" && /^[a-z_]{1,60}$/.test(payload.code))
+    error.code = payload.code;
+  if (["first_token", "idle", "deadline"].includes(payload?.timeoutPhase))
+    error.timeoutPhase = payload.timeoutPhase;
+  return error;
+}
+
 // Keep JSON compatibility for older deployments/providers. A streamed reply is
 // only complete after a `done` event; a dropped connection is never a success.
 export async function readChatResponse(response, onEvent, { signal } = {}) {
@@ -93,10 +106,9 @@ export async function readChatResponse(response, onEvent, { signal } = {}) {
   ) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok)
-      throw new Error(
-        typeof payload.message === "string"
-          ? payload.message.slice(0, 500)
-          : "Chat is temporarily unavailable. Please try again.",
+      throw publicChatError(
+        payload,
+        "Chat is temporarily unavailable. Please try again.",
       );
     return publicReply(payload);
   }
@@ -111,11 +123,7 @@ export async function readChatResponse(response, onEvent, { signal } = {}) {
     }
     if (!payload || typeof payload !== "object") throw interrupted();
     if (frame.event === "error")
-      throw new Error(
-        typeof payload.message === "string"
-          ? payload.message.slice(0, 500)
-          : interrupted().message,
-      );
+      throw publicChatError(payload, interrupted().message);
     if (frame.event === "done") return publicReply(payload);
     if (frame.event === "start") {
       characters = 0;
