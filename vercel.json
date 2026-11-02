@@ -10,5 +10,5 @@
     }
   ],
   "framework": null,
-  "buildCommand": "AURUM_VERIFY_CHAT_BASELINE_ORIGIN=https://aurum-quant-ai.vercel.app AURUM_VERIFY_LIVE_CHAT_STREAM=1 npm run build:vercel"
+  "buildCommand": "AURUM_VERIFY_CHAT_MODELS=mistralai/mistral-7b-instruct-v0.3,nvidia/nemotron-3.5-bolt-e4b,nv-mistralai/mistral-nemo-12b-instruct AURUM_VERIFY_LIVE_CHAT_STREAM=1 npm run build:vercel"
 }

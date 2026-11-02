@@ -7,6 +7,8 @@ async function verifyChatStreaming({
   origin = process.env.AURUM_VERIFY_ORIGIN ||
     "https://aurum-quant-ai.vercel.app",
   fetchImpl = globalThis.fetch,
+  modelIds,
+  requestTimeoutMs = 150000,
   emit = (record) =>
     console.log("[LIVE-CHAT-STREAM] " + JSON.stringify(record)),
   label = "deployed-chat",
@@ -47,9 +49,25 @@ async function verifyChatStreaming({
   const fast = configuration.models.find(
     (model) => model.id === "openai/gpt-oss-20b",
   );
-  const probes = [{ check: "default-stream", modelKey: "" }];
-  if (fast) probes.push({ check: "explicit-fast-stream", modelKey: fast.key });
+  const probes = modelIds
+    ? modelIds.slice(0, 4).map((id) => ({
+        check: "catalog-model-stream",
+        model: id,
+        modelKey: configuration.models.find((model) => model.id === id)?.key,
+      }))
+    : [{ check: "default-stream", modelKey: "" }];
+  if (!modelIds && fast)
+    probes.push({ check: "explicit-selected-stream", modelKey: fast.key });
   for (const probe of probes) {
+    if (probe.modelKey === undefined) {
+      report({
+        check: probe.check,
+        model: probe.model,
+        ok: false,
+        code: "model_unavailable",
+      });
+      continue;
+    }
     const started = Date.now();
     const marker = "CHAT_" + randomUUID().slice(0, 8);
     const attempts = [];
@@ -76,7 +94,7 @@ async function verifyChatStreaming({
             },
           ],
         }),
-        signal: AbortSignal.timeout(150000),
+        signal: AbortSignal.timeout(requestTimeoutMs),
       });
       httpStatus = response.status;
       stream =

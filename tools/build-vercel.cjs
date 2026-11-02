@@ -345,6 +345,19 @@ module.exports = (req, res) => {
       });
     }
     if (process.env.AURUM_VERIFY_LIVE_CHAT_STREAM === "1") {
+      if (process.env.AURUM_VERIFY_CHAT_MODELS) {
+        // Optional, capped catalog-only diagnostics. A model's catalog entry
+        // alone is not evidence of a working completion endpoint.
+        await withPackagedChat(handler, (origin) =>
+          verifyChatStreaming({
+            origin,
+            label: "catalog-probes",
+            requestTimeoutMs: 20000,
+            modelIds:
+              process.env.AURUM_VERIFY_CHAT_MODELS.split(",").filter(Boolean),
+          }),
+        );
+      }
       const report = await withPackagedChat(handler, (origin) =>
         verifyChatStreaming({ origin, label: "packaged-candidate" }),
       );

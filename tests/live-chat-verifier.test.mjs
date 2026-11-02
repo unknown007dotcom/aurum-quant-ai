@@ -137,3 +137,22 @@ test(
     assert.equal(calls, 3);
   },
 );
+
+test("explicit live model diagnostics are capped and never send a model missing from the catalog", async () => {
+  const selected = [];
+  const report = await verifyChatStreaming({
+    origin: "https://app.example",
+    emit() {},
+    modelIds: ["missing/model", model],
+    requestTimeoutMs: 2000,
+    fetchImpl: async (_url, options) => {
+      if (options.method !== "POST") return Response.json(configuration);
+      selected.push(JSON.parse(options.body).modelKey);
+      return stream(answer);
+    },
+  });
+  assert.equal(report.ok, false);
+  assert.equal(report.records[1].code, "model_unavailable");
+  assert.equal(report.records[2].ok, true);
+  assert.deepEqual(selected, ["fast"]);
+});

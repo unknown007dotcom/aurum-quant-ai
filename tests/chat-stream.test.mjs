@@ -533,3 +533,37 @@ test("browser JSON and SSE errors preserve only safe timeout diagnostics", async
     },
   );
 });
+
+test("chat opts into current-catalog recovery when legacy fallback model IDs are no longer listed", async () => {
+  const alternate = "mistralai/mistral-7b-instruct-v0.3";
+  const calls = [],
+    events = [];
+  const fetch = provider(
+    (body) => {
+      calls.push(body.model);
+      return body.model === model
+        ? Response.json({}, { status: 503 })
+        : sse(
+            providerEvent({
+              choices: [
+                {
+                  delta: { content: "A useful answer from a current model." },
+                  finish_reason: "stop",
+                },
+              ],
+            }),
+          );
+    },
+    [model, alternate],
+  );
+  const reply = await completeChat(input, settings, {}, fetch, {
+    onEvent: (event) => events.push(event),
+  });
+  assert.deepEqual(calls, [model, alternate]);
+  assert.equal(reply.model, alternate);
+  assert.equal(reply.modelFallbackUsed, true);
+  assert.equal(
+    events.filter((event) => event.type === "start").at(-1).model,
+    alternate,
+  );
+});

@@ -421,3 +421,98 @@ test(
     assert.equal(result.value.content, "Cold model's complete answer.");
   },
 );
+
+test(
+  "chat still has bounded fallback when every other historic preferred model has left the catalog",
+  { timeout: 2000 },
+  async (t) => {
+    clock(t);
+    const upstream = stream();
+    const controller = new AbortController();
+    t.after(() => controller.abort());
+    const alternate = {
+      ...MODEL,
+      id: "mistralai/mistral-7b-instruct-v0.3",
+      key: "alternate",
+    };
+    const current = { models: [FAST, alternate], defaultModelKey: FAST.key };
+    const calls = [];
+    const result = observe(
+      completeWithFallback(
+        current,
+        selectModel(current),
+        MESSAGES,
+        { ...options(), catalogFallback: true, signal: controller.signal },
+        async (_url, request) => {
+          const id = JSON.parse(request.body).model;
+          calls.push(id);
+          return id === FAST.id
+            ? upstream.response
+            : Response.json({
+                choices: [
+                  {
+                    message: {
+                      content: "A genuine answer from an active alternative",
+                    },
+                  },
+                ],
+              });
+        },
+      ),
+    );
+    await nextTurn();
+    t.mock.timers.tick(45001);
+    await nextTurn();
+    assert.deepEqual(
+      calls,
+      [FAST.id, alternate.id],
+      "A retired hard-coded fallback list must not leave a stalled model with the whole 110s budget",
+    );
+    await result.done;
+    assert.equal(result.error, undefined);
+    assert.equal(result.value.model, alternate.id);
+    assert.equal(result.value.modelFallbackUsed, true);
+    assert.equal(upstream.cancelled, true);
+  },
+);
+
+test("catalog fallback is chat-only, deduplicated, and capped at three actual catalog models", async () => {
+  const current = {
+    models: [
+      FAST,
+      ...["alpha", "beta", "gamma", "delta"].map((id) => ({
+        ...MODEL,
+        id: `example/${id}-instruct`,
+      })),
+    ],
+    defaultModelKey: FAST.key,
+  };
+  const calls = [];
+  const fetch = async (_url, request) => {
+    calls.push(JSON.parse(request.body).model);
+    return Response.json({}, { status: 503 });
+  };
+  await assert.rejects(
+    completeWithFallback(current, selectModel(current), MESSAGES, {}, fetch),
+  );
+  assert.deepEqual(
+    calls,
+    [FAST.id],
+    "Analysis keeps the existing candidate policy unless explicitly opted in",
+  );
+  calls.length = 0;
+  await assert.rejects(
+    completeWithFallback(
+      current,
+      selectModel(current),
+      MESSAGES,
+      { catalogFallback: true },
+      fetch,
+    ),
+  );
+  assert.equal(calls.length, 3);
+  assert.equal(new Set(calls).size, 3);
+  assert.ok(
+    calls.every((id) => current.models.some((model) => model.id === id)),
+  );
+});
