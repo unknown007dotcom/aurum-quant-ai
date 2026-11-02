@@ -170,6 +170,9 @@ export function restoreState(value) {
           id:
             typeof message.id === "string" ? message.id.slice(0, 100) : newId(),
           role: message.role,
+          ...(message.role === "assistant" && message.incomplete === true
+            ? { incomplete: true }
+            : {}),
           ...(message.role === "assistant" &&
           normalizeMarketEvidence(message.market)
             ? { market: normalizeMarketEvidence(message.market) }
@@ -205,6 +208,7 @@ export function requestMessages(messages, includeContext = true) {
   const valid = messages.filter(
     (message) =>
       ["user", "assistant"].includes(message.role) &&
+      !message.incomplete &&
       typeof message.content === "string" &&
       message.content.trim(),
   );
@@ -248,35 +252,141 @@ export function escapeHtml(text) {
 }
 
 // Intentionally limited Markdown: no raw HTML, remote images, or executable links.
-export function formatMessage(text) {
-  const inline = (value) =>
-    escapeHtml(value)
-      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-  const blocks = String(text).split(/(```[\s\S]*?(?:```|$))/g);
-  return blocks
-    .map((block) => {
-      if (block.startsWith("```")) {
-        const code = block.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");
-        return `<pre><code>${escapeHtml(code)}</code></pre>`;
-      }
-      return block
-        .trim()
-        .split(/\n\s*\n/)
-        .filter(Boolean)
-        .map((paragraph) => {
-          const lines = paragraph.split("\n");
-          if (lines.every((line) => /^\s*[-*] /.test(line)))
-            return `<ul>${lines.map((line) => `<li>${inline(line.replace(/^\s*[-*] /, ""))}</li>`).join("")}</ul>`;
-          if (lines.every((line) => /^\s*\d+\. /.test(line)))
-            return `<ol>${lines.map((line) => `<li>${inline(line.replace(/^\s*\d+\. /, ""))}</li>`).join("")}</ol>`;
-          if (/^#{1,6} /.test(paragraph) && lines.length === 1)
-            return `<h3>${inline(paragraph.replace(/^#{1,6} /, ""))}</h3>`;
-          return `<p>${inline(paragraph).replace(/\n/g, "<br>")}</p>`;
-        })
-        .join("");
+// Parse blocks by line so tables also work immediately beside prose/headings and
+// while a streamed row is still arriving. Every cell goes through HTML escaping.
+function inlineMarkdown(value) {
+  return String(value)
+    .split(/(`+[^`\n]*?`+)/g)
+    .map((part) => {
+      const code = part.match(/^(`+)([\s\S]*?)\1$/);
+      if (code)
+        return `<code>${escapeHtml(code[2].replace(/\\\|/g, "|"))}</code>`;
+      return escapeHtml(part)
+        .replace(/\\\|/g, "|")
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
     })
     .join("");
+}
+
+function tableCells(line) {
+  const cells = [];
+  let cell = "";
+  let codeFence = "";
+  let hasPipe = false;
+  const text = line.trim();
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === "\\" && index + 1 < text.length) {
+      cell += character + text[++index];
+    } else if (character === "`") {
+      const ticks = text.slice(index).match(/^`+/)[0];
+      if (codeFence === ticks) codeFence = "";
+      else if (!codeFence && text.indexOf(ticks, index + ticks.length) >= 0)
+        codeFence = ticks;
+      cell += ticks;
+      index += ticks.length - 1;
+    } else if (character === "|" && !codeFence) {
+      hasPipe = true;
+      cells.push(cell.trim());
+      cell = "";
+    } else cell += character;
+  }
+  cells.push(cell.trim());
+  if (!hasPipe) return null;
+  if (text.startsWith("|")) cells.shift();
+  // Only discard an actual trailing separator, not an escaped literal pipe.
+  if (cells.at(-1) === "" && text.endsWith("|")) cells.pop();
+  return cells;
+}
+
+function tableHeader(lines, index) {
+  const headers = tableCells(lines[index] || "");
+  const separators = tableCells(lines[index + 1] || "");
+  if (
+    !headers?.length ||
+    separators?.length !== headers.length ||
+    !separators.every((cell) => /^:?-+:?$/.test(cell))
+  )
+    return null;
+  return {
+    headers,
+    alignments: separators.map((cell) =>
+      cell.endsWith(":") ? (cell.startsWith(":") ? "center" : "right") : "left",
+    ),
+  };
+}
+
+export function formatMessage(text) {
+  const lines = String(text).replace(/\r\n?/g, "\n").split("\n");
+  const output = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index++;
+      continue;
+    }
+    if (/^\s*```/.test(line)) {
+      const code = [];
+      index++;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index]))
+        code.push(lines[index++]);
+      if (index < lines.length) index++;
+      output.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      continue;
+    }
+    const table = tableHeader(lines, index);
+    if (table) {
+      const cell = (tag, value, column) =>
+        `<${tag}${tag === "th" ? ' scope="col"' : ""} class="align-${table.alignments[column]}">${inlineMarkdown(value)}</${tag}>`;
+      const rows = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim()) {
+        const values = tableCells(lines[index]);
+        if (!values || tableHeader(lines, index)) break;
+        // Pad incomplete streaming rows and ignore surplus cells, as GFM does.
+        rows.push(
+          `<tr>${table.headers.map((_, column) => cell("td", values[column] || "", column)).join("")}</tr>`,
+        );
+        index++;
+      }
+      output.push(
+        `<div class="message-table-scroll" role="region" aria-label="Response table. Scroll horizontally for more columns." tabindex="0"><table><thead><tr>${table.headers.map((value, column) => cell("th", value, column)).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`,
+      );
+      continue;
+    }
+    if (/^#{1,6} /.test(line)) {
+      output.push(`<h3>${inlineMarkdown(line.replace(/^#{1,6} /, ""))}</h3>`);
+      index++;
+      continue;
+    }
+    const list = /^\s*[-*] /.test(line)
+      ? "ul"
+      : /^\s*\d+\. /.test(line)
+        ? "ol"
+        : null;
+    if (list) {
+      const pattern = list === "ul" ? /^\s*[-*] / : /^\s*\d+\. /;
+      const items = [];
+      while (index < lines.length && pattern.test(lines[index]))
+        items.push(
+          `<li>${inlineMarkdown(lines[index++].replace(pattern, ""))}</li>`,
+        );
+      output.push(`<${list}>${items.join("")}</${list}>`);
+      continue;
+    }
+    const paragraph = [line];
+    index++;
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !/^\s*(?:```|#{1,6} |[-*] |\d+\. )/.test(lines[index]) &&
+      !tableHeader(lines, index)
+    )
+      paragraph.push(lines[index++]);
+    output.push(`<p>${paragraph.map(inlineMarkdown).join("<br>")}</p>`);
+  }
+  return output.join("");
 }
 
 export function exportConversation(chat) {
@@ -287,7 +397,7 @@ export function exportConversation(chat) {
         message.role === "assistant"
           ? marketEvidenceText(message.market)
           : null;
-      return `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.content}${evidence ? `\n\nMarket evidence: ${evidence.heading}\n${evidence.stateLabel}\n${evidence.detail}\n${evidence.timeLabel}` : ""}`;
+      return `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.incomplete ? "_Partial response — stopped or interrupted._\n\n" : ""}${message.content}${evidence ? `\n\nMarket evidence: ${evidence.heading}\n${evidence.stateLabel}\n${evidence.detail}\n${evidence.timeLabel}` : ""}`;
     })
     .join(
       "\n\n---\n\n",

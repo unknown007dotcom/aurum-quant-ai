@@ -28,6 +28,7 @@ const server = http.createServer(async (req, res) => {
         "chat.js",
         "favicon.svg",
         "modules/chat-store.mjs",
+        "modules/chat-stream.mjs",
         "modules/chat-persona.mjs",
         "modules/chat-market-evidence.mjs",
       ].some((name) => file === path.join(ROOT, name)) ||

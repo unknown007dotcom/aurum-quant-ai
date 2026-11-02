@@ -201,49 +201,24 @@ async function readRawBody(req) {
 }
 
 function createResponseAdapter(nodeRes) {
-  let statusCode = 200;
-  let finished = false;
-
-  return {
-    get finished() {
-      return finished;
-    },
-    status(code) {
-      statusCode = Number(code) || 200;
-      return this;
-    },
-    setHeader(name, value) {
-      nodeRes.setHeader(name, value);
-      return this;
-    },
-    json(payload) {
-      if (finished) return this;
-      if (!nodeRes.headersSent) {
-        nodeRes.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-      }
-      nodeRes.end(JSON.stringify(payload));
-      finished = true;
-      return this;
-    },
-    send(payload) {
-      if (finished) return this;
-      if (!nodeRes.headersSent) {
-        nodeRes.writeHead(statusCode);
-      }
-      nodeRes.end(payload);
-      finished = true;
-      return this;
-    },
-    end(payload = "") {
-      if (finished) return this;
-      if (!nodeRes.headersSent) {
-        nodeRes.writeHead(statusCode);
-      }
-      nodeRes.end(payload);
-      finished = true;
-      return this;
-    },
+  // Keep the native streaming/event methods (write, drain, close, flushHeaders)
+  // instead of wrapping the response in a JSON-only adapter.
+  nodeRes.status = function (code) {
+    this.statusCode = Number(code) || 200;
+    return this;
   };
+  nodeRes.json = function (payload) {
+    if (this.writableEnded) return this;
+    if (!this.headersSent)
+      this.setHeader("Content-Type", "application/json; charset=utf-8");
+    this.end(JSON.stringify(payload));
+    return this;
+  };
+  nodeRes.send = function (payload) {
+    if (!this.writableEnded) this.end(payload);
+    return this;
+  };
+  return nodeRes;
 }
 
 function serveStatic(requestPath, res) {

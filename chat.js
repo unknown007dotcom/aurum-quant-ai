@@ -15,12 +15,13 @@ import {
   historyGroup,
   formatMessage,
   exportConversation,
-} from "./modules/chat-store.mjs?v=4";
+} from "./modules/chat-store.mjs?v=5";
 import {
   normalizeMarketEvidence,
   marketEvidenceText,
 } from "./modules/chat-market-evidence.mjs";
 import { CHAT_ASSISTANT, resolveChatArtwork } from "./modules/chat-persona.mjs";
+import { readChatResponse } from "./modules/chat-stream.mjs";
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) =>
@@ -158,8 +159,13 @@ function renderHistory() {
   $("searchEmpty").hidden = chats.length > 0 || exampleMatches > 0 || !query;
 }
 
-function messageNode(message, index) {
+function messageNode(message, index, { streaming = false } = {}) {
   const article = element("article", `message ${message.role}`);
+  article.dataset.messageId = message.id;
+  if (streaming) {
+    article.dataset.streaming = "true";
+    article.setAttribute("aria-busy", "true");
+  }
   const avatar = element("div", "message-avatar");
   avatar.setAttribute("aria-hidden", "true");
   if (message.role === "assistant") {
@@ -192,17 +198,23 @@ function messageNode(message, index) {
     time.dateTime = new Date(message.createdAt).toISOString();
     meta.append(time);
   }
-  if (message.role === "assistant" && message.model) {
-    const actualModel = element("span", "message-model", message.model);
-    actualModel.title = `Actual response model: ${message.model}`;
+  if (message.role === "assistant" && (message.model || streaming)) {
+    const actualModel = element("span", "message-model", message.model || "");
+    actualModel.title = `Actual response model: ${message.model || "pending"}`;
+    actualModel.hidden = !message.model;
     meta.append(actualModel);
   }
   const body = element("div", "message-body");
   if (message.role === "assistant")
     body.innerHTML = formatMessage(message.content);
   else body.textContent = message.content;
+  if (streaming) {
+    // Announce the completed answer once, not the full table on every token.
+    body.setAttribute("aria-live", "off");
+    body.hidden = !message.content;
+  }
   main.append(meta, body);
-  if (message.role === "assistant") {
+  if (message.role === "assistant" && !streaming) {
     const evidence = marketEvidenceText(message.market);
     if (evidence) {
       const card = element("aside", "market-evidence");
@@ -217,7 +229,29 @@ function messageNode(message, index) {
       main.append(card);
     }
   }
-  if (message.role === "assistant") {
+  if (message.incomplete)
+    main.append(
+      element(
+        "p",
+        "message-error-note",
+        "Partial response — stopped or interrupted.",
+      ),
+    );
+  if (streaming) {
+    const indicator = element("div", "typing-indicator");
+    indicator.setAttribute("role", "status");
+    indicator.innerHTML =
+      '<span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>';
+    indicator.append(
+      element(
+        "div",
+        "typing-label",
+        message.content ? "Writing…" : "Thinking it through…",
+      ),
+    );
+    main.append(indicator);
+  }
+  if (message.role === "assistant" && !streaming) {
     const actions = element("div", "message-actions");
     const copy = element("button", "");
     copy.type = "button";
@@ -239,6 +273,91 @@ function messageNode(message, index) {
   return article;
 }
 
+// Preserve horizontal position and keyboard focus while a table grows. Only
+// replace the in-flight message body; never rebuild chat history per token.
+function rememberTableView(root) {
+  const view = new Map();
+  root.querySelectorAll(".message-table-scroll").forEach((table) => {
+    const id = table.closest(".message")?.dataset.messageId || "";
+    if (!view.has(id)) view.set(id, []);
+    view
+      .get(id)
+      .push({
+        left: table.scrollLeft,
+        focused: table === document.activeElement,
+      });
+  });
+  return view;
+}
+
+function restoreTableView(root, view) {
+  const indices = new Map();
+  root.querySelectorAll(".message-table-scroll").forEach((table) => {
+    const id = table.closest(".message")?.dataset.messageId || "";
+    const index = indices.get(id) || 0;
+    indices.set(id, index + 1);
+    const previous = view.get(id)?.[index];
+    if (!previous) return;
+    table.scrollLeft = previous.left;
+    if (previous.focused) table.focus({ preventScroll: true });
+  });
+}
+
+function isNearLatestMessage() {
+  const scroll = $("messageScroll");
+  return scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop < 90;
+}
+
+function paintStreamingMessage(operation) {
+  operation.frame = null;
+  if (
+    pending !== operation ||
+    current.id !== operation.chatId ||
+    !operation.node?.isConnected
+  )
+    return;
+  const follow = isNearLatestMessage();
+  const body = operation.node.querySelector(".message-body");
+  const view = rememberTableView(body);
+  body.innerHTML = formatMessage(operation.message.content);
+  body.hidden = !operation.message.content;
+  restoreTableView(body, view);
+  const model = operation.node.querySelector(".message-model");
+  model.textContent = operation.message.model;
+  model.hidden = !operation.message.model;
+  model.title = `Actual response model: ${operation.message.model || "pending"}`;
+  operation.node.querySelector(".typing-label").textContent = operation.message
+    .content
+    ? "Writing…"
+    : operation.attempts > 1
+      ? "Trying another response…"
+      : "Thinking it through…";
+  $("messageInput").placeholder = operation.message.content
+    ? `${CHAT_ASSISTANT.name} is writing…`
+    : `${CHAT_ASSISTANT.name} is thinking it through…`;
+  // Reading earlier messages must not be interrupted by forced autoscroll.
+  if (follow) $("messageScroll").scrollTop = $("messageScroll").scrollHeight;
+}
+
+function queueStreamingMessage(operation, event) {
+  if (pending !== operation) return;
+  if (event.type === "start") {
+    operation.attempts++;
+    operation.message.content = "";
+    operation.message.model = event.model;
+    operation.message.market = normalizeMarketEvidence(event.market);
+  } else if (event.type === "delta") {
+    operation.message.content = (operation.message.content + event.text).slice(
+      0,
+      32000,
+    );
+  }
+  if (!operation.frame)
+    operation.frame = requestAnimationFrame(() =>
+      paintStreamingMessage(operation),
+    );
+}
+
 function renderConversation({ scroll = true } = {}) {
   const hasMessages = current.messages.length > 0;
   $("welcomeScreen").hidden = hasMessages;
@@ -250,6 +369,7 @@ function renderConversation({ scroll = true } = {}) {
     ? `${current.title} · ${CHAT_ASSISTANT.name}`
     : `${CHAT_ASSISTANT.name} · Chat Mode · Aurum Quant AI`;
   const container = $("messages");
+  const tableView = rememberTableView(container);
   container.setAttribute("aria-busy", "true");
   container.replaceChildren();
   if (current.exampleId)
@@ -264,10 +384,10 @@ function renderConversation({ scroll = true } = {}) {
     container.append(messageNode(message, index)),
   );
   if (pending?.chatId === current.id) {
-    const typing = element("div", "message assistant");
-    typing.innerHTML = `<div class="message-avatar has-portrait" aria-hidden="true"><img src="${CHAT_ASSISTANT.avatar}" width="30" height="30" alt="" /></div><div class="message-main"><div class="message-meta"><strong>${CHAT_ASSISTANT.name}</strong></div><div class="typing-indicator" aria-hidden="true"><span></span><span></span><span></span><div class="typing-label">Thinking it through…</div></div><span class="sr-only">${CHAT_ASSISTANT.name} is preparing a response.</span></div>`;
-    container.append(typing);
+    pending.node = messageNode(pending.message, -1, { streaming: true });
+    container.append(pending.node);
   }
+  restoreTableView(container, tableView);
   container.setAttribute("aria-busy", "false");
   $("chatError").hidden = !current.error;
   $("chatErrorText").textContent = current.error || "";
@@ -353,7 +473,9 @@ function updateComposer() {
   $("sendButton").title = waiting ? "Stop response" : "Send message";
   $("messageInput").readOnly = waiting;
   $("messageInput").placeholder = waiting
-    ? `${CHAT_ASSISTANT.name} is thinking it through…`
+    ? pending.message.content
+      ? `${CHAT_ASSISTANT.name} is writing…`
+      : `${CHAT_ASSISTANT.name} is thinking it through…`
     : `What's on your mind? Ask ${CHAT_ASSISTANT.name} anything…`;
   $("characterCount").hidden = $("messageInput").value.length < 7200;
   $("characterCount").textContent =
@@ -441,6 +563,28 @@ function submitMessage(event) {
   requestReply();
 }
 
+function savePartialReply(operation) {
+  const { chat, message, regenerate } = operation;
+  if (!message.content.trim()) return false;
+  // A failed regeneration must not destroy a previously completed answer.
+  if (
+    regenerate &&
+    chat.messages.at(-1)?.role === "assistant" &&
+    !chat.messages.at(-1).incomplete
+  )
+    return false;
+  const partial = {
+    ...message,
+    content: message.content.trim(),
+    incomplete: true,
+  };
+  if (regenerate && chat.messages.at(-1)?.role === "assistant")
+    chat.messages.splice(-1, 1, partial);
+  else chat.messages.push(partial);
+  chat.updatedAt = Date.now();
+  return true;
+}
+
 async function requestReply(regenerate = false) {
   if (pending) return;
   const chat = current;
@@ -451,15 +595,24 @@ async function requestReply(regenerate = false) {
   if (previous.at(-1)?.role !== "user") return;
   const operation = {
     chatId: chat.id,
+    chat,
+    regenerate,
     controller: new AbortController(),
     timedOut: false,
+    attempts: 0,
+    message: {
+      id: newId(),
+      role: "assistant",
+      content: "",
+      model: "",
+      createdAt: Date.now(),
+    },
   };
   pending = operation;
   chat.error = "";
   renderConversation();
-  // The server allows up to ~110s of generation after model discovery;
-  // give the request enough room to receive that answer.
-  const timeout = setTimeout(() => {
+  // Includes discovery/market lookup plus the server's generation deadline.
+  operation.timeout = setTimeout(() => {
     operation.timedOut = true;
     operation.controller.abort();
   }, 150000);
@@ -468,9 +621,10 @@ async function requestReply(regenerate = false) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Accept: "application/json",
+        Accept: "text/event-stream, application/json",
       },
       body: JSON.stringify({
+        stream: true,
         modelKey: chat.settings.modelKey,
         settings: {
           style: chat.settings.style,
@@ -481,29 +635,21 @@ async function requestReply(regenerate = false) {
       }),
       signal: operation.controller.signal,
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(
-        typeof payload.message === "string"
-          ? payload.message.slice(0, 500)
-          : "Chat is temporarily unavailable. Please try again.",
-      );
-    if (typeof payload.content !== "string" || !payload.content.trim())
-      throw new Error("The AI returned an empty response. Please try again.");
+    const payload = await readChatResponse(
+      response,
+      (event) => queueStreamingMessage(operation, event),
+      { signal: operation.controller.signal },
+    );
     if (pending !== operation) return;
     if (payload.modelFallbackUsed)
       toast(
         `The selected model was unavailable. ${payload.model} answered instead.`,
       );
     const message = {
-      id: newId(),
-      role: "assistant",
-      content: payload.content.slice(0, 32000),
-      model: typeof payload.model === "string" ? payload.model : "",
-      ...(normalizeMarketEvidence(payload.market)
-        ? { market: normalizeMarketEvidence(payload.market) }
-        : {}),
-      createdAt: Date.now(),
+      ...operation.message,
+      content: payload.content,
+      model: payload.model,
+      market: normalizeMarketEvidence(payload.market),
     };
     if (regenerate && chat.messages.at(-1)?.role === "assistant")
       chat.messages.splice(-1, 1, message);
@@ -511,17 +657,21 @@ async function requestReply(regenerate = false) {
     chat.updatedAt = Date.now();
   } catch (error) {
     if (pending !== operation) return;
+    const savedPartial = savePartialReply(operation);
     chat.error = operation.timedOut
       ? "The AI response took too long. Your message is saved; try again."
       : error instanceof TypeError
         ? "Couldn't connect to the chat service. Your message is saved; please try again."
         : error.message || "Couldn't complete this response. Please try again.";
+    if (savedPartial) chat.error += " Partial text has been saved.";
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(operation.timeout);
+    cancelAnimationFrame(operation.frame);
     if (pending === operation) {
+      const follow = isNearLatestMessage();
       pending = null;
       saveCurrent();
-      renderConversation();
+      renderConversation({ scroll: follow });
       renderHistory();
     }
   }
@@ -531,11 +681,16 @@ function stopResponse(silent = false) {
   if (!pending) return;
   const operation = pending;
   pending = null;
+  clearTimeout(operation.timeout);
+  cancelAnimationFrame(operation.frame);
   operation.controller.abort();
-  const chat = state.conversations.find((item) => item.id === operation.chatId);
-  if (chat) chat.error = "Response stopped. Try again when you're ready.";
+  const savedPartial = savePartialReply(operation);
+  operation.chat.error = savedPartial
+    ? "Response stopped. Partial text has been saved; try again when you're ready."
+    : "Response stopped. Try again when you're ready.";
   saveCurrent();
-  renderConversation();
+  renderConversation({ scroll: false });
+  renderHistory();
   if (!silent) toast("Response stopped.");
 }
 
@@ -974,7 +1129,10 @@ document.addEventListener("click", (event) => {
     syncDrawerAccessibility();
   }),
 );
-window.addEventListener("pagehide", persist);
+window.addEventListener("pagehide", () => {
+  stopResponse(true);
+  persist();
+});
 
 try {
   showImage(localStorage.getItem(IMAGE_KEY));

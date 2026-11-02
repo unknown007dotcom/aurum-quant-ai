@@ -1244,6 +1244,71 @@ a {
   padding-left: 4px;
   margin-bottom: 6px;
 }
+/* Semantic tables stay readable instead of collapsing into pipe-delimited text.
+   Wide comparisons scroll inside their message, never across the whole page. */
+.message.assistant .message-body {
+  white-space: normal;
+}
+.message-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 14px 0;
+  border: 1px solid var(--gold-border);
+  border-radius: 10px;
+  background: var(--surface);
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) var(--surface-soft);
+  overscroll-behavior-x: contain;
+}
+.message-table-scroll:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+.message-table-scroll table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: normal;
+}
+.message-table-scroll th,
+.message-table-scroll td {
+  min-width: 120px;
+  max-width: 360px;
+  padding: 11px 14px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: break-word;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line);
+}
+.message-table-scroll th {
+  background: var(--gold-soft);
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--gold-border);
+}
+.message-table-scroll tbody tr:nth-child(even) {
+  background: var(--surface-soft);
+}
+.message-table-scroll tbody tr:hover {
+  background: var(--sage-soft);
+}
+.message-table-scroll tr > :last-child { border-right: 0; }
+.message-table-scroll tbody tr:last-child > td { border-bottom: 0; }
+.message-table-scroll .align-center { text-align: center; }
+.message-table-scroll .align-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.message[data-streaming] .typing-indicator {
+  margin-top: 10px;
+}
+.message[data-streaming] .message-body[hidden] + .typing-indicator {
+  margin-top: 0;
+}
 .message-actions {
   display: flex;
   gap: 6px;

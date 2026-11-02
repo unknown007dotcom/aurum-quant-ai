@@ -310,6 +310,7 @@ module.exports = (req, res) => {
       overrides: Object.fromEntries(
         [
           "chat-store.mjs",
+          "chat-stream.mjs",
           "chat-persona.mjs",
           "chat-market-evidence.mjs",
           "terminal-analysis-skills.mjs",

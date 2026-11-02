@@ -572,8 +572,12 @@ test("tracked fallback settings contain no active NVIDIA credential", () => {
     new URL("../data/settings.json", import.meta.url),
     "utf8",
   );
-  assert.doesNotMatch(file, /nvapi-[A-Za-z0-9_-]{20,}/);
-  assert.equal(credentials(JSON.parse(file), {}).length, 0);
+  // Assert booleans, not the settings text: a failing security check must not
+  // print credentials into CI logs. Never alter local broker settings in tests.
+  assert.equal(/nvapi-[A-Za-z0-9_-]{20,}/.test(file), false,
+    "Tracked fallback settings must not contain NVIDIA API credentials.");
+  assert.equal(credentials(JSON.parse(file), {}).length === 0, true,
+    "Tracked fallback settings must not contain provider credentials.");
 });
 
 test("legacy and removed browser selections recover using only the server catalog", async () => {
