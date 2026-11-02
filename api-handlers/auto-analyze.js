@@ -1,3 +1,4 @@
+const analysisService = import("../lib/analysis-service.mjs");
 const { getAdminSettings, getFirestore } = require("../lib/firebase-admin");
 
 const DEFAULT_BASE = "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
@@ -13,31 +14,24 @@ module.exports = async function handler(req, res) {
 
   try {
     const settings = (await getAdminSettings()) || {};
-    const models = Array.isArray(settings.nvidiaModels) ? settings.nvidiaModels : [];
-    const debateModels = Array.isArray(settings.debateModels) ? settings.debateModels : [];
-    const model = models.find((m) => m.key === settings.defaultModelKey) || models[0];
-    const globalKeys = normalizeNvidiaKeyPool(settings.globalNvidiaApiKeys, settings.globalNvidiaApiKey);
-    const resolvedApiKey = String(model?.apiKey || "").trim() || pickRandomNvidiaKey(globalKeys);
-    if (!model?.id || !resolvedApiKey) {
-      res.status(400).json({ message: "No configured summary model for auto analysis." });
-      return;
-    }
+    const { completeAnalysis } = await analysisService;
 
     const timeframe = "15min";
     const baseUrl = process.env.AUTO_ANALYZE_BASE_URL || DEFAULT_BASE;
-    const marketResp = await fetch(`${baseUrl}/market-data?interval=${encodeURIComponent(timeframe)}&outputsize=5000&symbol=XAU%2FUSD`);
+    const marketResp = await fetch(`${baseUrl}/market-mtf?entryTf=${encodeURIComponent(timeframe)}&outputsize=240&symbol=XAU_USD`);
     const marketData = await marketResp.json().catch(() => ({}));
-    if (!marketResp.ok || !Array.isArray(marketData.values) || marketData.values.length < 50) {
+    const entryValues = marketData.data?.find?.(entry => entry.id === "entry")?.values || marketData.values;
+    if (!marketResp.ok || !Array.isArray(entryValues) || entryValues.length < 50) {
       throw new Error(marketData?.message || `Market data failed (${marketResp.status}).`);
     }
 
-    const candles = marketData.values.slice(0, 240).reverse().map((row) => ({
+    const candles = entryValues.map((row) => ({
       open: Number(row.open),
       high: Number(row.high),
       low: Number(row.low),
       close: Number(row.close),
       datetime: row.datetime,
-    }));
+    })).sort((a, b) => new Date(a.datetime) - new Date(b.datetime)).slice(-240);
     const closes = candles.map((c) => c.close);
     const sma20 = sma(closes, 20);
     const sma50 = sma(closes, 50);
@@ -57,25 +51,11 @@ module.exports = async function handler(req, res) {
       "Return only concise trade summary with headings: Summary, Direction, Entry Zone, Invalidation, Risk Note.",
     ].join("\n");
 
-    const aiResp = await fetch(`${baseUrl}/ai-decision`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        selectedModelKey: model.key,
-        model: model.id,
-        label: model.label || model.id,
-        apiKey: resolvedApiKey,
-        baseUrl: model.baseUrl || "https://integrate.api.nvidia.com/v1",
-        models: models.map((m) => ({ ...m, apiKey: String(m?.apiKey || "").trim() || pickRandomNvidiaKey(globalKeys) })),
-        debateModels: debateModels.map((m) => ({ ...m, apiKey: String(m?.apiKey || "").trim() || pickRandomNvidiaKey(globalKeys) })),
-        temperature: Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.2,
-        prompt,
-      }),
-    });
-    const aiData = await aiResp.json().catch(() => ({}));
-    if (!aiResp.ok) {
-      throw new Error(aiData?.message || `AI decision failed (${aiResp.status}).`);
-    }
+    const aiData = await completeAnalysis({
+      selectedModelKey: settings.defaultModelKey || "",
+      temperature: Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.2,
+      debateMode: "fast", prompt,
+    }, settings, process.env);
 
     const aiText = extractAiText(aiData);
     const entry = {
@@ -113,7 +93,7 @@ module.exports = async function handler(req, res) {
     }).catch(() => {});
 
     res.setHeader("Cache-Control", "no-store");
-    res.status(200).json({ ok: true, saved: true, model: aiData?.model || model.id });
+    res.status(200).json({ ok: true, saved: true, model: aiData.model });
   } catch (error) {
     res.status(502).json({ message: error?.message || "Auto analysis failed." });
   }

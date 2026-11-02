@@ -1,3 +1,4 @@
+const nvidiaRuntime = import("../lib/nvidia-runtime.mjs");
 const { getFirestore, getAdminSettings } = require("../lib/firebase-admin");
 
 const DEFAULT_BASE = "https://aurum-quant-edge.aurum-quant-ai.workers.dev";
@@ -505,13 +506,12 @@ async function runFailureDebateAndPersist(db, settings, failed) {
     return false;
   }
 
-  const globalKeys = normalizeNvidiaKeyPool(settings?.globalNvidiaApiKeys, settings?.globalNvidiaApiKey);
-  const summaryModels = normalizeModels(settings?.nvidiaModels, globalKeys, 0);
-  const debateModels = normalizeModels(settings?.debateModels, globalKeys, summaryModels.length);
-  const modelPool = dedupeModels([...summaryModels, ...debateModels]).slice(0, MAX_DEBATE_MODELS);
-  if (!modelPool.length) {
-    return false;
-  }
+  const { discoverModels } = await nvidiaRuntime;
+  let runtime;
+  try { runtime = await discoverModels(settings || {}, process.env); } catch { return false; }
+  const summaryModels = runtime.models;
+  const modelPool = runtime.models.slice(0, MAX_DEBATE_MODELS);
+  if (!modelPool.length) return false;
 
   const debatePrompt = buildFailureDebatePrompt(failed);
   const responses = await Promise.all(
@@ -631,41 +631,12 @@ function fallbackReviewSummary(usable) {
 }
 
 async function requestAi({ model, prompt, system, maxTokens, timeoutMs }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { requestCompletion, NvidiaError } = await nvidiaRuntime;
   try {
-    const response = await fetch(`${sanitizeBaseUrl(model.baseUrl || DEFAULT_AI_BASE)}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${model.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model.id,
-        temperature: 0.15,
-        max_tokens: maxTokens,
-        stream: false,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: prompt },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return { ok: false, text: "", message: payload?.error?.message || payload?.message || `AI HTTP ${response.status}` };
-    }
-    const text = extractAiText(payload);
-    return { ok: Boolean(text), text, message: text ? "" : "Empty AI response." };
+    const result = await requestCompletion(model, [{ role: "system", content: system }, { role: "user", content: prompt }], { temperature: 0.15, maxTokens, timeoutMs });
+    return { ok: true, text: result.content, message: "" };
   } catch (error) {
-    if (error?.name === "AbortError") {
-      return { ok: false, text: "", message: "AI timeout." };
-    }
-    return { ok: false, text: "", message: error?.message || "AI request failed." };
-  } finally {
-    clearTimeout(timeout);
+    return { ok: false, text: "", message: error instanceof NvidiaError ? error.message : "AI review failed." };
   }
 }
 

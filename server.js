@@ -69,6 +69,11 @@ const API_ROOT = path.join(ROOT, "api-handlers");
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".ico": "image/x-icon",
@@ -104,7 +109,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Aurum Quant AI running at http://localhost:${PORT}`);
 });
 
@@ -112,6 +117,28 @@ const CLOUDFLARE_BACKEND = process.env.CLOUDFLARE_WORKER_URL || "https://aurum-q
 
 async function serveApiRoute(nodeReq, nodeRes, requestUrl) {
   const relativeRoute = requestUrl.pathname.replace(/^\/api\//, "");
+  // Match production: all AI execution and AI settings use the same Node backend.
+  const localAiHandlers = { chat: "chat", "ai-decision": "ai-decision", "ai-health": "ai-health", settings: "settings" };
+  if (Object.hasOwn(localAiHandlers, relativeRoute)) {
+    nodeReq.query = Object.fromEntries(requestUrl.searchParams.entries());
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of nodeReq) {
+      bytes += chunk.length;
+      if (bytes > 512 * 1024) return sendJson(nodeRes, 413, { message: "API request is too large." });
+      chunks.push(chunk);
+    }
+    try {
+      const text = Buffer.concat(chunks).toString("utf8");
+      nodeReq.body = text ? JSON.parse(text) : {};
+    } catch {
+      return sendJson(nodeRes, 400, { message: "Send a valid JSON request." });
+    }
+    const responseAdapter = createResponseAdapter(nodeRes);
+    await require(`./api-handlers/${localAiHandlers[relativeRoute]}`)(nodeReq, responseAdapter);
+    if (!responseAdapter.finished) responseAdapter.end();
+    return;
+  }
   const targetUrl = `${CLOUDFLARE_BACKEND}/${relativeRoute}${requestUrl.search}`;
 
   try {
@@ -221,6 +248,9 @@ function createResponseAdapter(nodeRes) {
 
 function serveStatic(requestPath, res) {
   const safePath = requestPath === "/" ? "/index.html" : requestPath;
+  const publicFiles = new Set(["/index.html", "/chat.html", "/history.html", "/app.js", "/chat.js", "/history.js", "/styles.css", "/chat.css", "/logo.svg", "/favicon.svg", "/candle_guide.png"]);
+  const publicAsset = /^\/(?:assets|modules)\//.test(safePath) && !safePath.split("/").some(part => part.startsWith("."));
+  if (!publicFiles.has(safePath) && !publicAsset) return sendJson(res, 404, { message: "File not found." });
   const filePath = path.join(ROOT, safePath);
   const normalizedPath = path.normalize(filePath);
 

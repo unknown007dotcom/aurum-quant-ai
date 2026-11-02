@@ -7,14 +7,14 @@ export const TRADE_AUTO_CLOSE_MS = 30 * 60 * 1000;
 export const APP_CONFIG = {
   marketDataPath: "/market-data",
   marketMtfPath: "/market-mtf",
-  aiChatPath: "/ai-decision",
+  aiChatPath: "/api/ai-decision",
   intelPath: "/intel",
   nvidiaModelsPath: "/settings?action=fetch-nvidia",
   historyLogPath: "/history-log",
   adminMetricsPath: "/settings?action=metrics",
   optionsIntelPath: "/options-intel",
   siteSettingsPath: "/settings",
-  defaultMarketDataKey: "23c57edf48e541e48db2806575f58bf7",
+  defaultMarketDataKey: "",
   symbolCandidates: ["XAU/USD", "XAUUSD"],
   defaultBaseUrl: "https://integrate.api.nvidia.com/v1",
   firebase: {
@@ -49,7 +49,7 @@ export const APP_CONFIG = {
   defaultModels: [
     {
       key: "gpt-oss-default",
-      id: "openai/gpt-oss-120b",
+      id: "openai/gpt-oss-20b",
       label: "Main Summary Model",
       apiKey: "",
       baseUrl: "https://integrate.api.nvidia.com/v1",
