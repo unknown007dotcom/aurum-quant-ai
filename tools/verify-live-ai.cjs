@@ -257,7 +257,7 @@ async function verifyBrowser() {
     const started = Date.now();
     await page.locator("#retryButton").click();
     await page
-      .locator(".message.assistant .message-body")
+      .locator(".message.assistant:not([data-streaming]) .message-body")
       .filter({ hasText: marker })
       .waitFor({ timeout: 90000 });
     assert.equal(await page.locator("#chatError").isVisible(), false);

@@ -148,7 +148,7 @@ const server = http.createServer(async (req, res) => {
     );
     async function send(text) {
       const before = await page
-        .locator(".message.assistant .message-body")
+        .locator(".message.assistant:not([data-streaming]) .message-body")
         .count();
       await page.waitForFunction(
         () =>
@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
       await page.locator("#sendButton").click({ timeout: 5000 });
       await page.waitForFunction(
         (count) =>
-          document.querySelectorAll(".message.assistant .message-body").length >
+          document.querySelectorAll(".message.assistant:not([data-streaming]) .message-body").length >
             count || !document.getElementById("chatError").hidden,
         before,
       );

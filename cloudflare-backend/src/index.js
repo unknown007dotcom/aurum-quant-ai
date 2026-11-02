@@ -1,5 +1,6 @@
 import { AnalysisEngine } from "../../modules/analysis-engine.js";
-import { activeChatConfiguration, completeChat, ChatError } from "../../lib/chat-service.mjs";
+import { activeChatConfiguration, completeChat, validateChatRequest, ChatError } from "../../lib/chat-service.mjs";
+import { createChatStream, CHAT_STREAM_HEADERS } from "../../lib/chat-stream.mjs";
 import { completeAnalysis } from "../../lib/analysis-service.mjs";
 import { checkNvidiaHealth, discoverModels, secureBaseUrl, NvidiaError } from "../../lib/nvidia-runtime.mjs";
 const DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
@@ -274,6 +275,11 @@ async function handleChatResponse(request, env) {
     if (text.length > 512 * 1024) throw new ChatError("Chat request is too large.", 413);
     let body;
     try { body = JSON.parse(text); } catch { throw new ChatError("Send a valid JSON chat request."); }
+    validateChatRequest(body);
+    if (body.stream === true)
+      return new Response(createChatStream(body, settings, env, globalThis.fetch, { signal: request.signal }), {
+        headers: { ...corsHeaders(request), ...CHAT_STREAM_HEADERS },
+      });
     return jsonResponse(await completeChat(body, settings, env), request);
   } catch (error) {
     return jsonResponse({

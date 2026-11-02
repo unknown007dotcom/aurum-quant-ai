@@ -106,7 +106,12 @@ async function verifyBrowser() {
     await page.locator("#sendButton").click();
     const response = await responsePromise;
     assert.equal(response.status(), 200);
-    const payload = await response.json();
+    // Playwright exposes the completed wire body; support both new SSE replies
+    // and older JSON deployments without treating partial text as success.
+    const { readChatResponse } = await import("../modules/chat-stream.mjs");
+    const payload = await readChatResponse(new Response(await response.body(), {
+      status: response.status(), headers: response.headers(),
+    }));
     const market = assertMarketReply(payload);
     await page
       .locator(".message.assistant .market-evidence")

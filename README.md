@@ -34,6 +34,9 @@ Open **Chat Mode** beside **Settings** in the terminal header, or visit `/chat.h
 The dedicated workspace has searchable, browser-local conversations on the left,
 a central chat composer, and model/response settings plus a custom image area on
 the right. On smaller screens the sidebars become keyboard-accessible drawers.
+AI replies now appear as they are generated, and Markdown tables have clear
+headers, row spacing, and horizontal scrolling on smaller screens. Stop preserves
+labeled partial text for retry; existing saved chats use the improved table layout.
 
 Your assistant **Mira** has a default anime portrait in the right panel.
 You can also upload a PNG, JPEG, or WebP and restore Mira's portrait at any time; it stays in this browser and is not sent
