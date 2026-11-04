@@ -516,3 +516,40 @@ test("catalog fallback is chat-only, deduplicated, and capped at three actual ca
     calls.every((id) => current.models.some((model) => model.id === id)),
   );
 });
+
+test("chat recovery honors Aurum's configured active default before generic provider hints", async () => {
+  const preferred = {
+    ...MODEL,
+    id: "example/saved-default-instruct",
+    key: "saved-default",
+  };
+  const current = {
+    models: [MODEL, FAST, preferred],
+    defaultModelKey: preferred.key,
+  };
+  const calls = [];
+  const reply = await completeWithFallback(
+    current,
+    selectModel(current, MODEL.key),
+    MESSAGES,
+    { catalogFallback: true },
+    async (_url, request) => {
+      const id = JSON.parse(request.body).model;
+      calls.push(id);
+      return id === preferred.id
+        ? Response.json({
+            choices: [
+              { message: { content: "Answer using the saved default" } },
+            ],
+          })
+        : Response.json({}, { status: 503 });
+    },
+  );
+  assert.deepEqual(
+    calls,
+    [MODEL.id, preferred.id],
+    "A working model chosen in Aurum should not sit behind unrelated fallback hints",
+  );
+  assert.equal(reply.model, preferred.id);
+  assert.equal(reply.modelFallbackUsed, true);
+});

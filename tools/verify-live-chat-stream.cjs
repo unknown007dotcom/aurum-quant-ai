@@ -56,8 +56,12 @@ async function verifyChatStreaming({
         modelKey: configuration.models.find((model) => model.id === id)?.key,
       }))
     : [{ check: "default-stream", modelKey: "" }];
-  if (!modelIds && fast)
-    probes.push({ check: "explicit-selected-stream", modelKey: fast.key });
+  if (!modelIds)
+    probes.push({
+      check: "saved-selection-stream",
+      modelKey: fast?.key || "gpt-oss-default",
+      expectRecovery: !fast,
+    });
   for (const probe of probes) {
     if (probe.modelKey === undefined) {
       report({
@@ -136,7 +140,9 @@ async function verifyChatStreaming({
           stream &&
           deltaCount > 0 &&
           firstTextMs !== null &&
-          reply.content.trim().length > 20,
+          reply.content.trim().length > 20 &&
+          (!probe.expectRecovery || reply.modelFallbackUsed === true),
+        recoveryExpected: Boolean(probe.expectRecovery),
         httpStatus,
         stream,
         model: reply.model,

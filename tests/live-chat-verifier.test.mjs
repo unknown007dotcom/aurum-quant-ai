@@ -156,3 +156,43 @@ test("explicit live model diagnostics are capped and never send a model missing 
   assert.equal(report.records[2].ok, true);
   assert.deepEqual(selected, ["fast"]);
 });
+
+test("live verification still exercises a legacy saved selection when Chat no longer enables GPT-OSS", async () => {
+  const active = "example/active-instruct";
+  for (const recovers of [true, false]) {
+    const requests = [];
+    const report = await verifyChatStreaming({
+      origin: "https://app.example",
+      emit() {},
+      fetchImpl: async (_url, options) => {
+        if (options.method !== "POST")
+          return Response.json({
+            configured: true,
+            defaultModelKey: active,
+            models: [{ key: active, id: active }],
+          });
+        const body = JSON.parse(options.body);
+        requests.push(body.modelKey);
+        const recovered = Boolean(body.modelKey) && recovers;
+        return stream(
+          event("start", { model: active, modelFallbackUsed: recovered }) +
+            event("delta", {
+              text: "A real answer from the configured replacement model.",
+            }) +
+            event("done", {
+              model: active,
+              modelFallbackUsed: recovered,
+              content: "A real answer from the configured replacement model.",
+            }),
+        );
+      },
+    });
+    assert.deepEqual(requests, ["", "gpt-oss-default"]);
+    assert.equal(report.records[2].recoveryExpected, true);
+    assert.equal(
+      report.ok,
+      recovers,
+      "A silently lost legacy-selection recovery must fail verification",
+    );
+  }
+});

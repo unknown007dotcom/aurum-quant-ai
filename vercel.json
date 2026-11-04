@@ -10,5 +10,5 @@
     }
   ],
   "framework": null,
-  "buildCommand": "AURUM_DIAG_CHAT_TRANSPORT=1 npm run build:vercel"
+  "buildCommand": "AURUM_CONFIGURE_VERIFIED_CHAT=1 AURUM_VERIFY_LIVE_CHAT_STREAM=1 npm run build:vercel"
 }

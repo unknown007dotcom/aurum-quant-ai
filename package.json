@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "publish": "wrangler publish",
-    "test": "node tests/analysis-engine.test.js && node tests/oanda-settings-guard.test.js && node --test tests/chat.test.mjs tests/chat-markdown.test.mjs tests/chat-stream.test.mjs tests/chat-timeouts.test.mjs tests/live-chat-verifier.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs tests/chat-market.test.mjs tests/terminal-skills.test.mjs",
+    "test": "node tests/analysis-engine.test.js && node tests/oanda-settings-guard.test.js && node --test tests/chat.test.mjs tests/chat-markdown.test.mjs tests/chat-stream.test.mjs tests/chat-timeouts.test.mjs tests/chat-model-settings.test.mjs tests/live-chat-verifier.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs tests/chat-market.test.mjs tests/terminal-skills.test.mjs",
     "check-build": "wrangler deploy --dry-run",
     "test:chat-layout": "node tests/chat-layout.browser.cjs",
     "build:vercel": "node tools/build-vercel.cjs",
