@@ -1,87 +1,62 @@
-// Temporary, explicitly enabled, read-only configuration-source diagnostic.
-// Use existing Aurum credentials in memory only. Never print keys, hashes,
-// URLs, settings documents, provider error bodies, passwords or private reasoning.
-module.exports = async function diagnoseSavedAiSettings() {
-  const { getAdminSettings, getFirestore } = require("../lib/firebase-admin.js");
-  const { credentials, discoverModels, requestCompletion, NVIDIA_BASE_URL } = await import("../lib/nvidia-runtime.mjs");
-  const { randomUUID } = require("node:crypto");
-  const saved = await getAdminSettings();
-  const bundled = require("../data/settings.json");
-  const savedKeys = credentials(saved, {});
-  const effectiveKeys = credentials(saved, process.env);
-  const bundledKeys = credentials(bundled, {});
-  const same = (a, b) => a.apiKey === b.apiKey && a.baseUrl === b.baseUrl;
-  const hasKey = (value) => typeof value === "string" && Boolean(value.trim());
-  let databaseStatus = "unavailable", databaseMatchesLoaded = false;
+// Temporary read-only compatibility check using ONLY the key saved in Aurum.
+// No credential values, hashes, provider URLs, error bodies or reasoning in logs.
+module.exports = async function diagnoseSavedKeyRequests() {
+  const { getAdminSettings } = require("../lib/firebase-admin.js");
+  const { discoverModels, requestCompletion, visibleText } = await import("../lib/nvidia-runtime.mjs");
+  const settings = await getAdminSettings();
+  const runtime = await discoverModels(settings, {});
+  const model = runtime.models.find((entry) => entry.id === "openai/gpt-oss-20b");
+  if (!model) throw new Error("The documented comparison model is not in the active catalog.");
+  const messages = [{ role: "user", content: "Which number is larger, 9.11 or 9.8?" }];
+  const records = [];
+  // Match NVIDIA's currently published model-page sample (not our client defaults).
+  const started = Date.now();
   try {
-    const snapshot = await getFirestore().collection("admin").doc("settings").get();
-    databaseStatus = snapshot.exists ? "present" : "missing";
-    if (snapshot.exists) {
-      const databaseKeys = credentials(snapshot.data(), {});
-      databaseMatchesLoaded = databaseKeys.length === savedKeys.length && databaseKeys.every((key, index) => same(key, savedKeys[index]));
-    }
-  } catch { /* No raw database error details in logs. */ }
-  const summarize = (settings, keys) => ({
-    credentialCount: keys.length,
-    globalKeyPresent: hasKey(settings.globalNvidiaApiKey),
-    globalPoolCount: Array.isArray(settings.globalNvidiaApiKeys) ? settings.globalNvidiaApiKeys.filter(hasKey).length : 0,
-    modelCount: (settings.nvidiaModels || []).length + (settings.debateModels || []).length,
-    defaultModelKey: typeof settings.defaultModelKey === "string" ? settings.defaultModelKey.slice(0, 180) : "",
-  });
-  console.log("[AI-SETTINGS-SOURCE] " + JSON.stringify({
-    databaseStatus, databaseMatchesLoaded,
-    environmentOverridePresent: hasKey(process.env.NVIDIA_API_KEY),
-    aiSettingsAdminConfigured: hasKey(process.env.ADMIN_PASSWORD),
-    saved: summarize(saved, savedKeys), bundled: summarize(bundled, bundledKeys),
-    effectiveCredentialCount: effectiveKeys.length,
-    effectiveUsesSavedKey: effectiveKeys.some((key) => savedKeys.some((savedKey) => same(key, savedKey))),
-    savedKeysAllInBundledCopy: savedKeys.every((key) => bundledKeys.some((bundledKey) => same(key, bundledKey))),
-  }));
-  const candidates = [];
-  const add = (keys, source) => keys.forEach((key, index) => {
-    if (key.baseUrl !== NVIDIA_BASE_URL) return;
-    const label = `${source}-${index + 1}`;
-    const existing = candidates.find((candidate) => same(candidate.key, key));
-    if (existing) existing.sources.push(label);
-    else candidates.push({ key, sources: [label] });
-  });
-  // Do not let an environment override hide the actual saved application key.
-  add(savedKeys, "saved-settings");
-  add(effectiveKeys, "effective-server");
-  add(bundledKeys, "bundled-settings");
-  const results = [];
-  for (const candidate of candidates.slice(0, 4)) {
-    let runtime;
-    try {
-      runtime = await discoverModels({ nvidiaModels: [{ id: "openai/gpt-oss-20b", ...candidate.key }] });
-    } catch (error) {
-      console.log("[AI-SETTINGS-PROBE] " + JSON.stringify({ sources: candidate.sources, stage: "catalog", ok: false, code: error.code || "configuration_error" }));
-      if (error.code === "rate_limited") break;
-      continue;
-    }
-    const models = ["openai/gpt-oss-20b", "google/gemma-3-4b-it"]
-      .map((id) => runtime.models.find((model) => model.id === id)).filter(Boolean);
-    for (const model of models) {
-      const started = Date.now();
-      let firstTextMs = null, deltaCount = 0;
-      try {
-        const marker = "SETTINGS_" + randomUUID().slice(0, 8);
-        const reply = await requestCompletion(model, [{ role: "user", content: `Start with ${marker} and give one short tip for organizing a reading list. This is a connectivity test.` }], {
-          stream: true, temperature: 0, maxTokens: 256,
-          timeoutMs: 20000, deadline: started + 20000, idleTimeoutMs: 15000,
-          onDelta(text) { if (text.trim()) { firstTextMs ??= Date.now() - started; deltaCount++; } },
-        });
-        const result = { sources: candidate.sources, model: model.id, ok: true, firstTextMs, deltaCount, durationMs: Date.now() - started, visibleChars: reply.content.length, markerMatched: reply.content.includes(marker), replyExcerpt: reply.content.slice(0, 180) };
-        results.push(result);
-        console.log("[AI-SETTINGS-PROBE] " + JSON.stringify(result));
-      } catch (error) {
-        console.log("[AI-SETTINGS-PROBE] " + JSON.stringify({ sources: candidate.sources, model: model.id, ok: false, firstTextMs, deltaCount, durationMs: Date.now() - started, code: error.code || "provider_error", status: error.upstreamStatus || error.status, timeoutPhase: error.timeoutPhase }));
-        // Do not rotate keys or continue model probes to work around rate limits.
-        if (error.code === "rate_limited") throw new Error("Saved-settings verification was rate limited; no further requests were sent.");
-        if (error.code === "invalid_key") break;
-      }
-    }
+    const response = await fetch(model.baseUrl + "/chat/completions", {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(30000),
+      headers: { Authorization: `Bearer ${model.apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ model: model.id, messages, temperature: 1, top_p: 1, max_tokens: 4096, stream: false }),
+    });
+    const headersMs = Date.now() - started;
+    const payload = await response.json();
+    const content = visibleText(payload);
+    const record = { check: "nvidia-documented-json", savedSettingsKey: true, model: model.id, ok: response.ok && Boolean(content), status: response.status, headersMs, durationMs: Date.now() - started, visibleChars: content.length, replyExcerpt: content.slice(0, 180) };
+    records.push(record);
+    console.log("[SAVED-KEY-COMPATIBILITY] " + JSON.stringify(record));
+    if (response.status === 401 || response.status === 403 || response.status === 429) throw new Error("Provider access rejected; no additional requests permitted.");
+  } catch (error) {
+    if (error.message === "Provider access rejected; no additional requests permitted.") throw error;
+    console.log("[SAVED-KEY-COMPATIBILITY] " + JSON.stringify({ check: "nvidia-documented-json", savedSettingsKey: true, ok: false, durationMs: Date.now() - started, error: error.name }));
   }
-  console.log("[AI-SETTINGS-SOURCE] " + JSON.stringify({ check: "complete", workingSources: [...new Set(results.flatMap((result) => result.sources))], workingModels: [...new Set(results.map((result) => result.model))], settingsChanged: false }));
-  if (!results.length) throw new Error("No existing Aurum settings credential produced an answer in this diagnostic. No settings were changed.");
+  const probe = async (name, documented) => {
+    const started = Date.now();
+    let headersMs = null, status, firstTextMs = null, deltaCount = 0;
+    try {
+      const result = await requestCompletion(model, messages, {
+        stream: true, temperature: documented ? 1 : 0.6, maxTokens: documented ? 4096 : 1400,
+        timeoutMs: 30000, deadline: started + 30000, idleTimeoutMs: 20000,
+        onDelta(text) { if (text.trim()) { firstTextMs ??= Date.now() - started; deltaCount++; } },
+      }, async (url, options) => {
+        if (documented) {
+          const body = JSON.parse(options.body);
+          delete body.reasoning_effort;
+          body.top_p = 1;
+          options = { ...options, headers: { ...options.headers, Accept: "text/event-stream" }, body: JSON.stringify(body) };
+        }
+        const response = await fetch(url, options);
+        headersMs = Date.now() - started;
+        status = response.status;
+        return response;
+      });
+      const record = { check: name, savedSettingsKey: true, model: model.id, ok: true, headersMs, status, firstTextMs, deltaCount, durationMs: Date.now() - started, visibleChars: result.content.length, replyExcerpt: result.content.slice(0, 180) };
+      records.push(record);
+      console.log("[SAVED-KEY-COMPATIBILITY] " + JSON.stringify(record));
+    } catch (error) {
+      console.log("[SAVED-KEY-COMPATIBILITY] " + JSON.stringify({ check: name, savedSettingsKey: true, ok: false, headersMs, status, firstTextMs, deltaCount, durationMs: Date.now() - started, code: error.code || "provider_error" }));
+      if (["invalid_key", "rate_limited"].includes(error.code)) throw new Error("Provider access rejected; no additional requests permitted.");
+    }
+  };
+  await probe("documented-payload-sse", true);
+  await probe("app-payload-default-temperature", false);
+  if (!records.some((record) => record.ok)) throw new Error("The saved Aurum key was used, but neither documented nor app request payloads produced an answer. No settings changed.");
 };
