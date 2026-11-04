@@ -216,3 +216,34 @@ test("Chat defaults accept a stable model ID even when the owner's imported UI k
     [PRIMARY, SECONDARY],
   );
 });
+
+test("Chat retries a nonempty token-limited fragment instead of accepting it as the complete answer", async () => {
+  const tokenBudgets = [];
+  const fetch = async (url, options) => {
+    if (url.endsWith("/models"))
+      return Response.json({ data: [{ id: PRIMARY }] });
+    tokenBudgets.push(JSON.parse(options.body).max_tokens);
+    return Response.json({
+      choices: [
+        {
+          message: {
+            content:
+              tokenBudgets.length === 1
+                ? "Only a prefix"
+                : "A complete and useful answer after a bounded larger-token retry.",
+          },
+          finish_reason: tokenBudgets.length === 1 ? "length" : "stop",
+        },
+      ],
+    });
+  };
+  const reply = await completeChat(
+    { ...question, settings: { ...question.settings, style: "concise" } },
+    settings,
+    {},
+    fetch,
+  );
+  assert.equal(tokenBudgets.length, 2);
+  assert.ok(tokenBudgets[1] >= 4096);
+  assert.match(reply.content, /complete and useful/);
+});

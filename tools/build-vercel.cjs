@@ -328,8 +328,6 @@ module.exports = (req, res) => {
   console.log(
     `Packaged ${fileList.size} runtime files (${warnings.size} optional dependency warnings); static output excludes private server data.`,
   );
-  if (process.env.AURUM_CONFIGURE_VERIFIED_CHAT === "1")
-    await require("./configure-verified-chat.cjs")();
   if (
     process.env.AURUM_VERIFY_CHAT_BASELINE_ORIGIN ||
     process.env.AURUM_VERIFY_LIVE_CHAT_STREAM === "1"
