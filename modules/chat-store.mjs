@@ -1,3 +1,7 @@
+import {
+  normalizeNewsEvidence,
+  newsEvidenceText,
+} from "./chat-news-evidence.mjs";
 import { CHAT_ASSISTANT } from "./chat-persona.mjs";
 import {
   normalizeMarketEvidence,
@@ -16,6 +20,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   context: true,
   enterToSend: true,
   marketContext: true,
+  newsContext: true,
 });
 
 export const EXAMPLES = Object.freeze([
@@ -94,6 +99,8 @@ export function normalizeSettings(value = {}) {
       typeof settings.marketContext === "boolean"
         ? settings.marketContext
         : true,
+    newsContext:
+      typeof settings.newsContext === "boolean" ? settings.newsContext : true,
     enterToSend:
       typeof settings.enterToSend === "boolean" ? settings.enterToSend : true,
   };
@@ -176,6 +183,10 @@ export function restoreState(value) {
           ...(message.role === "assistant" &&
           normalizeMarketEvidence(message.market)
             ? { market: normalizeMarketEvidence(message.market) }
+            : {}),
+          ...(message.role === "assistant" &&
+          normalizeNewsEvidence(message.news, { limit: 6 })
+            ? { news: normalizeNewsEvidence(message.news, { limit: 6 }) }
             : {}),
           content: message.content.slice(
             0,
@@ -397,7 +408,9 @@ export function exportConversation(chat) {
         message.role === "assistant"
           ? marketEvidenceText(message.market)
           : null;
-      return `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.incomplete ? "_Partial response — stopped or interrupted._\n\n" : ""}${message.content}${evidence ? `\n\nMarket evidence: ${evidence.heading}\n${evidence.stateLabel}\n${evidence.detail}\n${evidence.timeLabel}` : ""}`;
+      const news =
+        message.role === "assistant" ? newsEvidenceText(message.news) : "";
+      return `## ${message.role === "user" ? "You" : CHAT_ASSISTANT.name}\n\n${message.incomplete ? "_Partial response — stopped or interrupted._\n\n" : ""}${message.content}${evidence ? `\n\nMarket evidence: ${evidence.heading}\n${evidence.stateLabel}\n${evidence.detail}\n${evidence.timeLabel}` : ""}${news ? `\n\n${news}` : ""}`;
     })
     .join(
       "\n\n---\n\n",

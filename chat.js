@@ -15,13 +15,21 @@ import {
   historyGroup,
   formatMessage,
   exportConversation,
-} from "./modules/chat-store.mjs?v=5";
+} from "./modules/chat-store.mjs?v=6";
 import {
   normalizeMarketEvidence,
   marketEvidenceText,
 } from "./modules/chat-market-evidence.mjs";
 import { CHAT_ASSISTANT, resolveChatArtwork } from "./modules/chat-persona.mjs";
-import { readChatResponse } from "./modules/chat-stream.mjs?v=2";
+import { readChatResponse } from "./modules/chat-stream.mjs?v=3";
+import {
+  normalizeNewsEvidence,
+  newsEvidenceText,
+} from "./modules/chat-news-evidence.mjs";
+import {
+  createNewsPanel,
+  newsEvidenceNode,
+} from "./modules/chat-news-panel.mjs";
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) =>
@@ -52,6 +60,16 @@ if (!state.activeId) current.draft = state.draft;
 // Keep these in sync with the phone/tablet drawer queries in chat.css.
 const historyMedia = matchMedia("(max-width: 899px)");
 const settingsMedia = matchMedia("(max-width: 640px)");
+const newsPanel = createNewsPanel({
+  panel: $("marketNewsPanel"),
+  list: $("newsList"),
+  status: $("newsStatus"),
+  updated: $("newsUpdatedAt"),
+  coverage: $("newsCoverage"),
+  sources: $("newsSources"),
+  refreshButton: $("refreshNewsButton"),
+  askButton: $("askNewsButton"),
+});
 
 function toast(message) {
   clearTimeout(toastTimer);
@@ -229,6 +247,10 @@ function messageNode(message, index, { streaming = false } = {}) {
       main.append(card);
     }
   }
+  if (message.role === "assistant" && !streaming) {
+    const newsCard = newsEvidenceNode(message.news);
+    if (newsCard) main.append(newsCard);
+  }
   if (message.incomplete)
     main.append(
       element(
@@ -257,7 +279,12 @@ function messageNode(message, index, { streaming = false } = {}) {
     copy.type = "button";
     copy.innerHTML = `${icon("copy")}Copy`;
     copy.setAttribute("aria-label", "Copy assistant response");
-    copy.addEventListener("click", () => copyResponse(message.content));
+    copy.addEventListener("click", () =>
+      copyResponse(
+        message.content +
+          (message.news ? "\n\n" + newsEvidenceText(message.news) : ""),
+      ),
+    );
     actions.append(copy);
     if (index === current.messages.length - 1 && !current.exampleId) {
       const regenerate = element("button", "");
@@ -280,12 +307,10 @@ function rememberTableView(root) {
   root.querySelectorAll(".message-table-scroll").forEach((table) => {
     const id = table.closest(".message")?.dataset.messageId || "";
     if (!view.has(id)) view.set(id, []);
-    view
-      .get(id)
-      .push({
-        left: table.scrollLeft,
-        focused: table === document.activeElement,
-      });
+    view.get(id).push({
+      left: table.scrollLeft,
+      focused: table === document.activeElement,
+    });
   });
   return view;
 }
@@ -346,6 +371,7 @@ function queueStreamingMessage(operation, event) {
     operation.message.content = "";
     operation.message.model = event.model;
     operation.message.market = normalizeMarketEvidence(event.market);
+    operation.message.news = normalizeNewsEvidence(event.news, { limit: 6 });
   } else if (event.type === "delta") {
     operation.message.content = (operation.message.content + event.text).slice(
       0,
@@ -435,6 +461,8 @@ function renderSettings() {
   $("creativityValue").value = options.temperature.toFixed(1);
   $("rememberContext").checked = options.context;
   $("useMarketContext").checked = options.marketContext;
+  $("useNewsContext").checked = options.newsContext;
+  newsPanel.setEnabled(options.newsContext);
   $("marketContextNote").textContent = !options.marketContext
     ? "Market lookup is off for this conversation."
     : configuration.marketData?.configured
@@ -630,6 +658,7 @@ async function requestReply(regenerate = false) {
           style: chat.settings.style,
           temperature: chat.settings.temperature,
           marketContext: chat.settings.marketContext,
+          newsContext: chat.settings.newsContext,
         },
         messages: requestMessages(previous, chat.settings.context),
       }),
@@ -650,6 +679,7 @@ async function requestReply(regenerate = false) {
       content: payload.content,
       model: payload.model,
       market: normalizeMarketEvidence(payload.market),
+      news: normalizeNewsEvidence(payload.news, { limit: 6 }),
     };
     if (regenerate && chat.messages.at(-1)?.role === "assistant")
       chat.messages.splice(-1, 1, message);
@@ -1038,6 +1068,24 @@ $("creativity").addEventListener("input", (event) =>
 $("useMarketContext").addEventListener("change", (event) =>
   updateSettings({ marketContext: event.target.checked }),
 );
+$("useNewsContext").addEventListener("change", (event) =>
+  updateSettings({ newsContext: event.target.checked }),
+);
+$("newsJumpButton").addEventListener("click", () => {
+  if (settingsMedia.matches && drawer?.panel !== $("chatSettingsPanel"))
+    openDrawer($("chatSettingsPanel"), $("newsJumpButton"));
+  $("marketNewsPanel").open = true;
+  $("marketNewsPanel").scrollIntoView({ block: "start" });
+  $("marketNewsPanel").querySelector("summary").focus({ preventScroll: true });
+});
+$("askNewsButton").addEventListener("click", () => {
+  closeDrawer(false);
+  $("messageInput").value = current.draft =
+    "What news could affect XAU/USD or the USD market today? Please cite the provided sources and distinguish older items from recent news.";
+  updateComposer();
+  persistSoon();
+  $("messageInput").focus();
+});
 $("rememberContext").addEventListener("change", (event) =>
   updateSettings({ context: event.target.checked }),
 );
@@ -1129,7 +1177,9 @@ document.addEventListener("click", (event) => {
     syncDrawerAccessibility();
   }),
 );
+window.addEventListener("pageshow", () => newsPanel.resume());
 window.addEventListener("pagehide", () => {
+  newsPanel.pause();
   stopResponse(true);
   persist();
 });

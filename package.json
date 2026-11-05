@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "publish": "wrangler publish",
-    "test": "node tests/analysis-engine.test.js && node tests/oanda-settings-guard.test.js && node --test tests/chat.test.mjs tests/chat-markdown.test.mjs tests/chat-stream.test.mjs tests/chat-timeouts.test.mjs tests/chat-model-settings.test.mjs tests/live-chat-verifier.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs tests/chat-market.test.mjs tests/terminal-skills.test.mjs",
+    "test": "node tests/analysis-engine.test.js && node tests/oanda-settings-guard.test.js && node --test tests/chat.test.mjs tests/chat-markdown.test.mjs tests/chat-stream.test.mjs tests/chat-timeouts.test.mjs tests/chat-model-settings.test.mjs tests/live-chat-verifier.test.mjs tests/nvidia-runtime.test.mjs tests/debate.test.mjs tests/chat-market.test.mjs tests/market-news.test.mjs tests/live-news-verifier.test.mjs tests/terminal-skills.test.mjs",
     "check-build": "wrangler deploy --dry-run",
     "test:chat-layout": "node tests/chat-layout.browser.cjs",
     "build:vercel": "node tools/build-vercel.cjs",
@@ -17,9 +17,12 @@
     "test:backtest": "node --test tests/backtest/*.test.cjs",
     "backtest:ai-session": "node tools/backtest/run-ai-session.mjs",
     "test:chat-stream": "node tests/chat-stream.browser.cjs",
-    "verify:live-chat-stream": "node tools/verify-live-chat-stream.cjs"
+    "verify:live-chat-stream": "node tools/verify-live-chat-stream.cjs",
+    "test:chat-news": "node tests/chat-news.browser.cjs",
+    "verify:live-news": "node tools/verify-live-news.cjs"
   },
   "dependencies": {
+    "fast-xml-parser": "5.12.0",
     "firebase": "^12.12.1",
     "firebase-admin": "^12.5.0"
   },

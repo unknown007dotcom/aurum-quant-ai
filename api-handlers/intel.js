@@ -20,10 +20,12 @@ module.exports = async function handler(req, res) {
     }
 
     if (type === "all" || type === "news") {
-      response.news = [
-        { event: "CPI m/m", impact: "High", currency: "USD", time: "12:30 GMT" },
-        { event: "Unemployment Claims", impact: "Medium", currency: "USD", time: "12:30 GMT" }
-      ];
+      // RSS headlines are not an economic calendar. Keep the legacy calendar
+      // array empty instead of fabricating recurring CPI/claims events. Existing
+      // analysis consumers must not treat headlines as scheduled high-impact data.
+      response.news = [];
+      response.calendarStatus = "unavailable";
+      response.newsFeed = await (await import("../lib/market-news.mjs")).getMarketNews();
     }
 
     res.status(200).json(response);

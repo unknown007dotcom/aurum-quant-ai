@@ -90,7 +90,7 @@ async function run() {
       const url = new URL(request.url());
       if (
         url.origin !== origin ||
-        (url.pathname.startsWith("/api/") && url.pathname !== "/api/chat")
+        (url.pathname.startsWith("/api/") && !["/api/chat", "/api/market-news"].includes(url.pathname))
       )
         forbidden.push(request.url());
       if (url.pathname === "/api/chat" && request.method() === "POST")

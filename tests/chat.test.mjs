@@ -72,6 +72,7 @@ test("settings retain explicit zero/false values and constrain invalid values", 
       temperature: 0,
       context: false,
       enterToSend: false,
+      newsContext: false,
     }),
     {
       modelKey: "",
@@ -80,6 +81,7 @@ test("settings retain explicit zero/false values and constrain invalid values", 
       context: false,
       enterToSend: false,
       marketContext: true,
+      newsContext: false,
     },
   );
   assert.equal(normalizeSettings({ temperature: 99 }).temperature, 1);

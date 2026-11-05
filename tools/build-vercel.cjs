@@ -313,6 +313,8 @@ module.exports = (req, res) => {
           "chat-stream.mjs",
           "chat-persona.mjs",
           "chat-market-evidence.mjs",
+          "chat-news-evidence.mjs",
+          "chat-news-panel.mjs",
           "terminal-analysis-skills.mjs",
         ].map((name) => [
           `modules/${name}`,
@@ -328,6 +330,18 @@ module.exports = (req, res) => {
   console.log(
     `Packaged ${fileList.size} runtime files (${warnings.size} optional dependency warnings); static output excludes private server data.`,
   );
+  if (process.env.AURUM_VERIFY_LIVE_NEWS === "1") {
+    const {
+      verifyLiveNews,
+      withPackagedNewsApi,
+    } = require("./verify-live-news.cjs");
+    await withPackagedNewsApi(handler, (origin) =>
+      verifyLiveNews({
+        origin,
+        includeChat: process.env.AURUM_VERIFY_NEWS_FEEDS_ONLY !== "1",
+      }),
+    );
+  }
   if (
     process.env.AURUM_VERIFY_CHAT_BASELINE_ORIGIN ||
     process.env.AURUM_VERIFY_LIVE_CHAT_STREAM === "1"

@@ -1,0 +1,131 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+const { verifyLiveNews, withPackagedNewsApi } = createRequire(import.meta.url)(
+  "../tools/verify-live-news.cjs",
+);
+const feed = () => ({
+  type: "market_news",
+  readOnly: true,
+  status: "available",
+  checkedAt: new Date().toISOString(),
+  items: [
+    {
+      id: "fixture",
+      sourceId: "investing-commodities",
+      title: "Gold and the dollar: test headline",
+      url: "https://www.investing.com/news/commodities-news/test",
+      publishedAt: new Date(Date.now() - 10000).toISOString(),
+      fetchedAt: new Date().toISOString(),
+    },
+  ],
+  sources: [
+    {
+      id: "investing-commodities",
+      status: "ok",
+      checkedAt: new Date().toISOString(),
+      fetchedAt: new Date().toISOString(),
+    },
+  ],
+});
+const event = (name, data) =>
+  `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+
+test("live news verification uses only read-only news/chat routes with no broker lookup or credential payload", async () => {
+  const records = [],
+    requests = [];
+  const result = await verifyLiveNews({
+    origin: "https://app.example",
+    emit: (record) => records.push(record),
+    fetchImpl: async (url, options) => {
+      requests.push(url);
+      assert.equal(options.redirect, "error");
+      assert.ok(options.signal);
+      if (url.endsWith("/api/market-news")) return Response.json(feed());
+      assert.equal(url, "https://app.example/api/chat");
+      const body = JSON.parse(options.body);
+      assert.equal(body.settings.marketContext, false);
+      assert.equal(body.settings.newsContext, true);
+      assert.equal(body.stream, true);
+      assert.equal(options.headers.Authorization, undefined);
+      const marker = body.messages[0].content.match(/NEWS_[a-f0-9]+/)[0];
+      const news = feed();
+      news.items[0].citation = "N1";
+      const content = `${marker}. The supplied test headline reports news about gold and the dollar [N1]. Its possible market implications are uncertain, and this is not a current price or trading signal.`;
+      return new Response(
+        event("start", { model: "test", news }) +
+          event("delta", { text: content }) +
+          event("done", { model: "test", content, news }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.tradesExecuted, false);
+  assert.equal(records[1].citedIds[0], "N1");
+  assert.equal(requests.length, 2);
+});
+
+test("a successful HTTP response containing placeholders, stale items or untrusted URLs is not live-news success", async () => {
+  for (const payload of [
+    { news: [{ event: "CPI", time: "12:30 GMT" }] },
+    { ...feed(), items: [] },
+    {
+      ...feed(),
+      items: [{ ...feed().items[0], publishedAt: "2020-01-01T00:00:00Z" }],
+    },
+    { ...feed(), items: [{ ...feed().items[0], url: "https://evil.example" }] },
+  ]) {
+    await assert.rejects(
+      verifyLiveNews({
+        origin: "https://app.example",
+        includeChat: false,
+        emit() {},
+        fetchImpl: async () => Response.json(payload),
+      }),
+      /recent, timestamped/,
+    );
+  }
+});
+
+test("AI prose without supplied source evidence/references cannot pass the live news gate", async () => {
+  await assert.rejects(
+    verifyLiveNews({
+      origin: "https://app.example",
+      emit() {},
+      fetchImpl: async (url) =>
+        url.endsWith("/api/market-news")
+          ? Response.json(feed())
+          : Response.json({
+              model: "test",
+              content:
+                "A generic statement about markets is not evidence of current news.",
+            }),
+    }),
+    /real answer/,
+  );
+});
+
+test("packaged news verification does not expose settings or trading endpoints", async () => {
+  let calls = 0;
+  await withPackagedNewsApi(
+    async (req, res) => {
+      calls++;
+      res.json(feed());
+    },
+    async (origin) => {
+      assert.equal((await fetch(origin + "/api/settings")).status, 404);
+      assert.equal(
+        (await fetch(origin + "/api/bot", { method: "POST" })).status,
+        404,
+      );
+      const result = await verifyLiveNews({
+        origin,
+        includeChat: false,
+        emit() {},
+      });
+      assert.equal(result.ok, true);
+    },
+  );
+  assert.equal(calls, 1);
+});

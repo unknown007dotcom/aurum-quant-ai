@@ -1,3 +1,4 @@
+import { getMarketNews } from "../../lib/market-news.mjs";
 import { AnalysisEngine } from "../../modules/analysis-engine.js";
 import { activeChatConfiguration, completeChat, validateChatRequest, ChatError } from "../../lib/chat-service.mjs";
 import { createChatStream, CHAT_STREAM_HEADERS } from "../../lib/chat-stream.mjs";
@@ -226,6 +227,12 @@ export default {
       }
       if (url.pathname === "/history-log") {
         return jsonResponse(await handleHistoryLog(request, env), request);
+      }
+      if (url.pathname === "/market-news") {
+        if (request.method !== "GET") return new Response(JSON.stringify({ message: "Method not allowed." }), { status: 405, headers: { ...corsHeaders(request), "Content-Type": "application/json", Allow: "GET" } });
+        if (url.search) return jsonResponse({ message: "This feed does not accept search queries or source URLs." }, request, 400);
+        const result = await getMarketNews();
+        return new Response(JSON.stringify(result), { headers: { ...corsHeaders(request), "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=0, s-maxage=60" } });
       }
       if (url.pathname === "/chat") {
         return handleChatResponse(request, env);

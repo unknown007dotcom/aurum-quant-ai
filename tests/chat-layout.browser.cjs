@@ -31,6 +31,8 @@ const server = http.createServer(async (req, res) => {
         "modules/chat-stream.mjs",
         "modules/chat-persona.mjs",
         "modules/chat-market-evidence.mjs",
+        "modules/chat-news-evidence.mjs",
+        "modules/chat-news-panel.mjs",
       ].some((name) => file === path.join(ROOT, name)) ||
       file.startsWith(path.join(ROOT, "assets") + path.sep);
     if (!allowed) {
@@ -125,6 +127,7 @@ async function run() {
         },
       });
     });
+    await context.route("**/api/market-news", (route) => route.fulfill({ json: { type: "market_news", readOnly: true, status: "unavailable", checkedAt: new Date().toISOString(), items: [], sources: [] } }));
     await page.goto(`http://127.0.0.1:${server.address().port}/chat.html`);
     await page.locator('#providerStatus[data-state="configured"]').waitFor();
 

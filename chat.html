@@ -21,8 +21,8 @@
       type="font/woff2"
       crossorigin
     />
-    <link rel="stylesheet" href="./chat.css?v=7" />
-    <script type="module" src="./chat.js?v=8"></script>
+    <link rel="stylesheet" href="./chat.css?v=8" />
+    <script type="module" src="./chat.js?v=9"></script>
   </head>
   <body>
     <a class="skip-link" href="#messageInput">Skip to chat</a>
@@ -205,6 +205,18 @@
               <p id="conversationTitle">A little insight. A new perspective.</p>
             </div>
             <div class="conversation-actions">
+              <button
+                class="icon-button news-jump-button"
+                id="newsJumpButton"
+                type="button"
+                aria-label="Open market news"
+                title="Gold & market news"
+                aria-controls="marketNewsPanel"
+              >
+                <svg class="icon" aria-hidden="true">
+                  <use href="./assets/chat-icons.svg#globe" /></svg
+                ><span>News</span>
+              </button>
               <button
                 class="icon-button settings-panel-toggle settings-mobile-toggle"
                 id="chatSettingsToggle"
@@ -598,6 +610,61 @@
               Quotes and recent candles, with source timestamps. No order
               execution.
             </p>
+            <label class="toggle-setting" for="useNewsContext"
+              ><span
+                ><strong>Gold & market news</strong
+                ><small>Public RSS · read-only news context</small></span
+              ><input
+                type="checkbox"
+                role="switch"
+                id="useNewsContext"
+                checked /><span class="toggle-track" aria-hidden="true"></span
+            ></label>
+            <details
+              class="news-panel"
+              id="marketNewsPanel"
+              data-status="loading"
+            >
+              <summary>
+                <span>News desk</span><small>XAU/USD · USD & macro</small>
+              </summary>
+              <div class="news-panel-content">
+                <p class="news-status" id="newsStatus" role="status">
+                  Checking public feeds…
+                </p>
+                <div class="news-toolbar">
+                  <small id="newsUpdatedAt"
+                    >No current headlines checked yet.</small
+                  ><button
+                    id="refreshNewsButton"
+                    type="button"
+                    aria-label="Refresh market news"
+                    title="Refresh (respects the source cache)"
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use href="./assets/chat-icons.svg#refresh" />
+                    </svg>
+                  </button>
+                </div>
+                <ol
+                  class="news-list"
+                  id="newsList"
+                  aria-label="Gold and market headlines"
+                ></ol>
+                <details class="news-source-details">
+                  <summary id="newsCoverage">Public RSS sources</summary>
+                  <ul id="newsSources"></ul>
+                </details>
+                <p class="news-footnote">
+                  Headlines only, with publisher delays. Checks about every 3
+                  minutes while this page is visible. No paid news API or
+                  trading access.
+                </p>
+                <button class="news-ask" id="askNewsButton" type="button">
+                  Discuss the news with Mira <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </details>
             <label class="toggle-setting" for="rememberContext"
               ><span
                 ><strong>Conversation context</strong
