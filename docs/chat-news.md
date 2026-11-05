@@ -183,3 +183,9 @@ verified separately after release and recorded in PR #5.
 Final local regression checks: 218/219 Node unit tests (the sole failure is the
 pre-existing tracked-credential guard), analysis 7/7, OANDA guards 8/8, backtests
 20/20, five browser suites, Worker dry-run, Vercel packaging and whitespace checks.
+
+The final candidate (`dpl_3uuGMbiikEFtc4K7R2MM6v9vAiKF`, `f795d85`) repeated the
+real-feed and real-AI checks successfully: all six sources responded; the complete
+answer cited supplied sources and explicitly qualified the gold headline's
+unverified timestamp and price. No temporary verification flag remains in the
+normal production build command.
