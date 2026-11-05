@@ -64,7 +64,7 @@ async function verifyLiveNews({
       messages: [
         {
           role: "user",
-          content: `Start with ${marker}. What recent news could affect XAU/USD or USD markets? Summarize at most two supplied headlines, cite their N identifiers, name the sources and dates, and distinguish reported news from possible market implications. Disclose older items or incomplete coverage. Do not invent a current price, a full article, or a forecast.`,
+          content: `Begin your reply with the confirmation code ${marker}; this code is not a news item or source identifier. What recent news could affect XAU/USD or USD markets? Summarize at most two supplied headlines, cite their N identifiers, name the sources and dates, and distinguish reported news from possible market implications. Disclose older items or incomplete coverage. Do not invent a current price, a full article, or a forecast.`,
         },
       ],
       settings: {
@@ -90,7 +90,10 @@ async function verifyLiveNews({
       Boolean(evidence?.items.length) &&
       refs.length > 0 &&
       refs.every((ref) => allowed.has(ref)) &&
-      reply.content.includes(marker) &&
+      reply.content
+        .trim()
+        .replace(/^[*`#\s]+/, "")
+        .startsWith(marker) &&
       reply.content.length > 100 &&
       deltas > 0,
     model: reply.model,
