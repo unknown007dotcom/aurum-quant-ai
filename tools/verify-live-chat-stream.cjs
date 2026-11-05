@@ -9,6 +9,7 @@ async function verifyChatStreaming({
   fetchImpl = globalThis.fetch,
   modelIds,
   requestTimeoutMs = 150000,
+  requireIncremental = false,
   emit = (record) =>
     console.log("[LIVE-CHAT-STREAM] " + JSON.stringify(record)),
   label = "deployed-chat",
@@ -76,6 +77,7 @@ async function verifyChatStreaming({
     const marker = "CHAT_" + randomUUID().slice(0, 8);
     const attempts = [];
     let firstTextMs = null,
+      lastTextMs = null,
       deltaCount = 0,
       stream = false;
     let httpStatus;
@@ -121,6 +123,7 @@ async function verifyChatStreaming({
         }
         if (event.type === "delta") {
           deltaCount++;
+          if (event.text.trim()) lastTextMs = Date.now() - started;
           if (event.text.trim() && firstTextMs === null) {
             firstTextMs = Date.now() - started;
             emit({
@@ -141,7 +144,13 @@ async function verifyChatStreaming({
           deltaCount > 0 &&
           firstTextMs !== null &&
           reply.content.trim().length > 20 &&
-          (!probe.expectRecovery || reply.modelFallbackUsed === true),
+          (!probe.expectRecovery || reply.modelFallbackUsed === true) &&
+          (!requireIncremental ||
+            (deltaCount > 1 && lastTextMs - firstTextMs >= 50)),
+        incrementalVisibleText:
+          deltaCount > 1 && lastTextMs - firstTextMs >= 50,
+        textDeliverySpanMs:
+          firstTextMs === null ? null : lastTextMs - firstTextMs,
         recoveryExpected: Boolean(probe.expectRecovery),
         httpStatus,
         stream,
@@ -221,7 +230,9 @@ async function withPackagedChat(handler, run) {
 
 module.exports = { verifyChatStreaming, withPackagedChat };
 if (require.main === module)
-  verifyChatStreaming()
+  verifyChatStreaming({
+    requireIncremental: process.argv.includes("--require-incremental"),
+  })
     .then((report) => {
       if (!report.ok) process.exitCode = 1;
     })

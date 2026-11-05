@@ -196,3 +196,51 @@ test("live verification still exercises a legacy saved selection when Chat no lo
     );
   }
 });
+
+test("strict live verification distinguishes incremental delivery from buffered SSE", async () => {
+  for (const incremental of [false, true]) {
+    const report = await verifyChatStreaming({
+      origin: "https://app.example",
+      emit() {},
+      requireIncremental: true,
+      fetchImpl: async (_url, options) => {
+        if (options.method !== "POST") return Response.json(configuration);
+        if (!incremental) return stream(answer);
+        let timer;
+        return stream(
+          new ReadableStream({
+            start(controller) {
+              const encoder = new TextEncoder();
+              controller.enqueue(
+                encoder.encode(
+                  event("start", { model }) +
+                    event("delta", { text: "Keep a list. " }),
+                ),
+              );
+              timer = setTimeout(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    event("delta", {
+                      text: "Sort it by topic and choose one book.",
+                    }) +
+                      event("done", {
+                        model,
+                        content:
+                          "Keep a list. Sort it by topic and choose one book.",
+                      }),
+                  ),
+                );
+                controller.close();
+              }, 80);
+            },
+            cancel() {
+              clearTimeout(timer);
+            },
+          }),
+        );
+      },
+    });
+    assert.equal(report.ok, incremental);
+    assert.equal(report.records[1].incrementalVisibleText, incremental);
+  }
+});
