@@ -2,6 +2,8 @@ import {
   normalizeNewsEvidence,
   newsStatusText,
   newsItemAge,
+  newsHighlights,
+  newsTimeText,
   NEWS_REFRESH_MS,
   NEWS_MAX_CACHE_AGE_MS,
 } from "./chat-news-evidence.mjs";
@@ -37,9 +39,20 @@ function sourceLink(item, citation = false) {
   row.append(link);
   const meta = node("div", "news-meta");
   meta.append(node("span", "news-publisher", item.source));
-  const time = node("time", "", `Published ${timeLabel(item.publishedAt)}`);
-  if (item.publishedAt) time.dateTime = item.publishedAt;
+  const time = node(
+    "time",
+    "",
+    item.publishedAt
+      ? `Published ${timeLabel(item.publishedAt)}`
+      : item.updatedAt
+        ? `Updated ${timeLabel(item.updatedAt)} · publication time unavailable`
+        : newsTimeText(item),
+  );
+  if (item.publishedAt || item.updatedAt)
+    time.dateTime = item.publishedAt || item.updatedAt;
   meta.append(time);
+  if (item.category === "commentary")
+    meta.append(node("span", "news-age", "Analysis / commentary"));
   const age = newsItemAge(item);
   if (age !== "recent")
     meta.append(
@@ -132,6 +145,9 @@ export function createNewsPanel({
         item.title,
         item.url,
         item.publishedAt,
+        item.updatedAt,
+        item.publishedTimeText,
+        item.category,
         item.cached,
         newsItemAge(item),
       ]),
@@ -141,7 +157,7 @@ export function createNewsPanel({
         ? document.activeElement?.href
         : null;
       list.replaceChildren(
-        ...snapshot.items.slice(0, 8).map((item) => sourceLink(item)),
+        ...newsHighlights(snapshot.items, 8).map((item) => sourceLink(item)),
       );
       if (focused)
         [...list.querySelectorAll("a")]

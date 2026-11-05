@@ -93,7 +93,8 @@ test("Atom feeds, official releases and date-unknown items are supported without
   const atom = `<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Federal Reserve policy statement</title><link rel="alternate" href="https://www.federalreserve.gov/newsevents/pressreleases/policy.htm"/><updated>2026-11-05T11:00:00Z</updated></entry></feed>`;
   const items = await parseNewsFeed(atom, "fed-policy", NOW);
   assert.equal(items[0].kind, "official_release");
-  assert.equal(items[0].publishedAt, "2026-11-05T11:00:00.000Z");
+  assert.equal(items[0].publishedAt, null);
+  assert.equal(items[0].updatedAt, "2026-11-05T11:00:00.000Z");
   const unknown = await parseNewsFeed(
     rss([{ title: "Gold update", url: URL, date: null }]),
     SOURCE,
@@ -621,5 +622,68 @@ test("unknown source references cannot be saved as a completed news answer", asy
   await assert.rejects(
     completeChat(question, settings, {}, fetch),
     (error) => error.code === "invalid_news_citation",
+  );
+});
+
+test("timezone-less publisher dates remain explicitly unverified and gold is not crowded out of the context", async () => {
+  const parsed = await parseNewsFeed(
+    rss([
+      {
+        title: "Gold approaches resistance: Live levels",
+        url: URL,
+        date: "2026-11-05 11:30:00",
+      },
+    ]),
+    SOURCE,
+    NOW,
+  );
+  assert.equal(
+    parsed[0].publishedAt,
+    null,
+    "Do not invent UTC for a timezone-less date",
+  );
+  assert.equal(parsed[0].publishedTimeText, "2026-11-05 11:30:00");
+  const mock = feedsMock({
+    onRequest: (source) => {
+      if (source.sourceId === SOURCE)
+        return xml(
+          rss([
+            {
+              title: "Gold approaches resistance: Live levels",
+              url: URL,
+              date: "2026-11-05 11:30:00",
+            },
+          ]),
+        );
+      if (source.sourceId === "bbc-business")
+        return xml(
+          rss(
+            Array.from({ length: 10 }, (_, index) => ({
+              title: `Market report ${index}`,
+              url: `https://www.bbc.co.uk/news/articles/test-${index}`,
+              date: DATE,
+            })),
+          ),
+        );
+      return xml(rss([]));
+    },
+  });
+  const snapshot = await getMarketNews({
+    fetchImpl: mock.fetch,
+    now: () => NOW,
+  });
+  const evidence = publicNewsEvidence(snapshot);
+  const gold = evidence.items.find((item) => item.topic === "gold");
+  assert.ok(
+    gold,
+    "Keep an XAU/USD-relevant headline within the bounded context",
+  );
+  assert.equal(gold.category, "commentary");
+  assert.equal(gold.freshness, "unknown");
+  assert.equal(gold.publishedAt, null);
+  assert.match(newsEvidenceText(evidence), /timezone not supplied/);
+  assert.equal(
+    normalizeNewsEvidence({ ...snapshot, checkedAt: "2026-11-05T12:00:00" }),
+    null,
   );
 });

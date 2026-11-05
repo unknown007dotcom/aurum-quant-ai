@@ -61,7 +61,8 @@ export function newsSource(id) {
 export function newsDate(value) {
   if (
     typeof value !== "string" ||
-    !/^\d{4}-\d\d-\d\dT/.test(value) ||
+    value.length > 40 ||
+    !/^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(value) ||
     !Number.isFinite(Date.parse(value))
   )
     return null;
@@ -97,8 +98,52 @@ export function safeNewsUrl(value, sourceId) {
     return null;
   }
 }
+// Retain a publisher's timezone-less date as text, never silently invent UTC.
+export function newsLocalTime(value) {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d$/.test(value)
+  )
+    return null;
+  const canonical = value.replace(" ", "T");
+  const date = new Date(canonical + "Z"); // Validation only; never exposed as UTC.
+  return Number.isFinite(date.getTime()) &&
+    date.toISOString().slice(0, 19) === canonical
+    ? value
+    : null;
+}
+export function newsCategory(title, kind) {
+  if (kind === "official_release") return "official_release";
+  return /\b(live levels|technical analysis|RSI|SMA|EMA|forecast|opinion)\b/i.test(
+    title,
+  )
+    ? "commentary"
+    : "headline";
+}
+// Reserve space for gold without allowing undated items to masquerade as new.
+export function newsHighlights(items, limit = 6) {
+  const selected = items.slice(0, Math.min(4, limit));
+  for (const item of items.filter((item) => item.topic === "gold")) {
+    if (selected.length >= limit) break;
+    if (!selected.some((entry) => entry.url === item.url)) selected.push(item);
+    if (selected.filter((entry) => entry.topic === "gold").length >= 2) break;
+  }
+  for (const item of items) {
+    if (selected.length >= limit) break;
+    if (!selected.some((entry) => entry.url === item.url)) selected.push(item);
+  }
+  return selected;
+}
+export function newsTimeText(item) {
+  if (item.publishedAt) return `Published ${item.publishedAt}`;
+  if (item.updatedAt)
+    return `Updated ${item.updatedAt} (publication time not supplied)`;
+  if (item.publishedTimeText)
+    return `Publisher time ${item.publishedTimeText} (timezone not supplied)`;
+  return "Publication time unavailable";
+}
 export function newsItemAge(item, now = Date.now()) {
-  const time = Date.parse(item.publishedAt || "");
+  const time = Date.parse(item.publishedAt || item.updatedAt || "");
   if (!Number.isFinite(time) || time > now + 5 * 60 * 1000) return "unknown";
   return now - time <= NEWS_RECENT_MS ? "recent" : "older";
 }
@@ -133,13 +178,19 @@ export function normalizeNewsEvidence(value, { limit = 18 } = {}) {
       sourceId: source.id,
       source: source.name,
       kind: source.kind,
+      category: newsCategory(title, source.kind),
       topic: ["gold", "macro", "markets"].includes(item.topic)
         ? item.topic
         : "markets",
       publishedAt: newsDate(item.publishedAt),
+      updatedAt: newsDate(item.updatedAt),
+      publishedTimeText: newsLocalTime(item.publishedTimeText),
       fetchedAt: newsDate(item.fetchedAt),
       freshness: newsItemAge(
-        { publishedAt: newsDate(item.publishedAt) },
+        {
+          publishedAt: newsDate(item.publishedAt),
+          updatedAt: newsDate(item.updatedAt),
+        },
         Date.parse(checkedAt),
       ),
       cached: item.cached === true,
@@ -230,7 +281,7 @@ export function newsStatusText(value, now = Date.now()) {
     };
   return {
     state: "available",
-    label: "Recent headlines",
+    label: "Headlines checked",
     detail:
       "Public RSS snapshots, not an instant newswire. Publication times may lag events.",
   };
@@ -245,7 +296,7 @@ export function newsEvidenceText(value) {
     newsStatusText(news).detail,
     ...news.items.map(
       (item) =>
-        `[${item.citation || item.id}] ${markdownText(item.title)} — ${item.source}. Published ${item.publishedAt || "time unavailable"}. ${item.url}`,
+        `[${item.citation || item.id}] ${markdownText(item.title)} — ${item.source}. ${newsTimeText(item)}. ${item.url}`,
     ),
   ].join("\n");
 }

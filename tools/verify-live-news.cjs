@@ -33,14 +33,12 @@ async function verifyLiveNews({
       status,
       errorCode,
     })),
-    sample: recent
-      .slice(0, 2)
-      .map(({ title, source, url, publishedAt }) => ({
-        title,
-        source,
-        url,
-        publishedAt,
-      })),
+    sample: recent.slice(0, 2).map(({ title, source, url, publishedAt }) => ({
+      title,
+      source,
+      url,
+      publishedAt,
+    })),
   };
   emit(sourceRecord);
   if (!sourceRecord.ok)
@@ -104,11 +102,22 @@ async function verifyLiveNews({
     citedIds: refs,
     replyExcerpt: reply.content.slice(0, 1200),
     suppliedHeadlines: evidence?.items.map(
-      ({ citation, title, source, publishedAt }) => ({
+      ({
         citation,
         title,
         source,
         publishedAt,
+        updatedAt,
+        publishedTimeText,
+        category,
+      }) => ({
+        citation,
+        title,
+        source,
+        publishedAt,
+        updatedAt,
+        publishedTimeText,
+        category,
       }),
     ),
     marketLookupRequested: false,
@@ -134,11 +143,9 @@ async function withPackagedNewsApi(handler, run) {
     };
     const pathname = new URL(req.url, "http://internal.invalid").pathname;
     if (!["/api/chat", "/api/market-news"].includes(pathname))
-      return res
-        .status(404)
-        .json({
-          message: "Only read-only news/chat verification is permitted.",
-        });
+      return res.status(404).json({
+        message: "Only read-only news/chat verification is permitted.",
+      });
     try {
       const chunks = [];
       let size = 0;
