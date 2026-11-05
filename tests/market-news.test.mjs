@@ -296,6 +296,8 @@ test("headline lookups are scoped to market/news requests and opt-out always win
   const ask = (content) => [{ role: "user", content }];
   for (const question of [
     "Latest XAUUSD news?",
+    "Can Mira get live nuse feed related to XAUUSD?",
+    "Any nuse?",
     "What news could affect gold today?",
     "Show market headlines",
     "Any news?",
