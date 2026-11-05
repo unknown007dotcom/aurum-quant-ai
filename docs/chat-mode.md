@@ -34,6 +34,20 @@ answer instead of duplicating it. Failed/stopped regeneration preserves an
 existing completed answer. A model fallback resets the in-flight draft before
 showing the new model's text, so two different answers are never concatenated.
 
+## Gold and market news
+
+Use **News** (the globe in the conversation header) to open the news desk in the
+right-hand settings panel/drawer. Public RSS headlines have publisher links,
+publication/update times, source-coverage and cached/stale labels. Polling checks
+roughly every three minutes only while the page is visible; it does not call the AI.
+**Discuss the news with Mira** fills the composer rather than auto-sending a prompt.
+
+The per-conversation **Gold & market news** switch controls polling and automatic
+news context for relevant questions. Answers carry an expandable, historical
+source snapshot, retained through Stop, reload, copy and export. Headlines are
+not full articles, current quotes or trading signals. See [news integration](chat-news.md)
+for source terms, unknown timezones, security, caching and live verification.
+
 ## Saved AI key and Chat models
 
 Chat continues to use the NVIDIA key in Aurum's protected server settings; no
@@ -90,15 +104,17 @@ Fonts and icons are served locally; the chat interface does not need a third-par
 
 ## API wiring
 
-The browser only calls same-origin `/api/chat`:
+The browser uses same-origin `/api/chat` for replies and `/api/market-news` for
+read-only RSS snapshots. It never calls publishers or the AI provider directly.
+The Chat API supports:
 
-- `GET`: `{ models: [{ key, id, label }], defaultModelKey, configured, marketData }`. “Configured” indicates a key is present, not a verified live connection.
-- `POST`: `{ stream?: boolean, modelKey, settings: { style, temperature, marketContext }, messages: [{ role, content }] }`.
-- Existing clients that omit `stream` (or use `false`) still receive JSON: `{ content, model, market?, modelFallbackUsed? }`. `market` is safe quote provenance, not credentials or the full candle dataset.
+- `GET`: `{ models: [{ key, id, label }], defaultModelKey, configured, marketData, newsData }`. “Configured” indicates a key is present, not a verified live connection.
+- `POST`: `{ stream?: boolean, modelKey, settings: { style, temperature, marketContext, newsContext }, messages: [{ role, content }] }`.
+- Existing clients that omit `stream` (or use `false`) still receive JSON: `{ content, model, market?, news?, modelFallbackUsed? }`. `market` is safe quote provenance, not credentials or the full candle dataset.
 - The browser sends `stream: true` and accepts `text/event-stream`. The server flushes headers and emits named SSE events with JSON data:
-  - `start`: `{ model, modelFallbackUsed, market? }`. Starts/resets one provider attempt.
+  - `start`: `{ model, modelFallbackUsed, market?, news? }`. Starts/resets one provider attempt.
   - `delta`: `{ text }`. Visible answer text only; never private reasoning or raw provider events.
-  - `done`: `{ content, model, market?, modelFallbackUsed? }`. Authoritative completed answer; persist it once.
+  - `done`: `{ content, model, market?, news?, modelFallbackUsed? }`. Authoritative completed answer; persist it once.
   - `error`: `{ code, message, timeoutPhase? }`. Safe error after streaming starts. A stream ending without `done` is an interruption, not success. Timeout phases are `first_token` (no answer started), `idle` (answer stalled), and `deadline` (overall generation limit). JSON errors preserve the same safe diagnostics.
 - Comment heartbeats keep the connection active during discovery/reasoning. `Cache-Control: no-cache, no-store, no-transform` and `X-Accel-Buffering: no` discourage intermediary buffering. Client disconnects cancel upstream generation; provider idle/absolute time limits remain in effect.
 - Invalid requests still return an appropriate HTTP status and JSON `{ message }` before streaming begins. Buffered-only providers remain supported, but cannot display text until their reply arrives.
@@ -121,9 +137,11 @@ npm run test:chat-layout # Docking, mobile drawers, resize, and interaction chec
 npm run test:chat-stream # Real HTTP streaming, readable tables, Stop/retry and persistence
 npm run test:ai-ui       # Real terminal controller, mocked HTTP, no trading
 npm run test:chat-market # Market provenance, failure recovery, persistence and mobile UI
+npm run test:chat-news   # News sources, freshness, opt-out, persistence and responsive desk
 node server.js           # Manual/browser verification at /chat.html
 # Opt-in: genuine provider requests to the public deployment, not mocks:
 npm run verify:live-chat-stream -- --require-incremental
+npm run verify:live-news # Real public feeds + source-grounded Mira answer
 # Select a different deployment with AURUM_VERIFY_ORIGIN=https://your-app.example
 ```
 

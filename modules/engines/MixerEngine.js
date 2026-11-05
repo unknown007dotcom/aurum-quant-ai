@@ -98,8 +98,13 @@ export class MixerEngine {
             bias: rmiBias,
             benchmark: "Self-Referenced Gold"
         };
+        // Headlines are not scheduled calendar events. Preserve an explicit
+        // unavailable state instead of implying that an empty calendar is clear.
         context.institutionalNews = intel.news || [];
-        context.newsToday = (intel.news || []).map(n => `${n.event} (${n.impact})`).join(", ");
+        context.newsCalendarStatus = intel.calendarStatus || "unspecified";
+        context.newsToday = intel.calendarStatus === "unavailable"
+            ? "Economic calendar unavailable; no scheduled events verified."
+            : (intel.news || []).map(n => `${n.event} (${n.impact})`).join(", ");
         
         // Detect Inducement (short-term swings)
         const shortSwings = detectSwings(entryCandles, 2);

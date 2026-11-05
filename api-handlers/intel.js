@@ -14,16 +14,19 @@ module.exports = async function handler(req, res) {
         response.rules = {
           confluence: { primary: 3, secondary: 2, tertiary: 1, minScore: 7 },
           tds: { highConviction: 7 },
-          version: "Institutional 2.0 (Markdown)"
+          version: "Institutional 2.0 (Markdown)",
         };
       }
     }
 
     if (type === "all" || type === "news") {
-      response.news = [
-        { event: "CPI m/m", impact: "High", currency: "USD", time: "12:30 GMT" },
-        { event: "Unemployment Claims", impact: "Medium", currency: "USD", time: "12:30 GMT" }
-      ];
+      // RSS headlines are not an economic calendar. Keep the legacy calendar
+      // array empty instead of fabricating recurring CPI/claims events. Existing
+      // analysis consumers must not treat headlines as scheduled high-impact data.
+      response.news = [];
+      response.calendarStatus = "unavailable";
+      response.newsEndpoint = "/api/market-news";
+      // Legacy analysis calls do not acquire a new RSS/network dependency.
     }
 
     res.status(200).json(response);

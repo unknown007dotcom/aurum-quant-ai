@@ -56,6 +56,15 @@ presented as live. The per-conversation market-context switch disables these
 lookups without changing the broker or trading settings.
 See [market-context integration](docs/chat-market-context.md).
 
+**News** in the chat header opens a read-only gold/market news desk using public
+RSS feeds from Investing.com, BBC Business, the Federal Reserve and BLS. It checks
+about every three minutes while visible, labels source dates/uncertain timestamps,
+and lets Mira answer with linked source snapshots. The **Gold & market news**
+switch disables news context and polling per conversation. No paid news API key
+is needed; existing hosting/AI usage limits still apply. This is not an instant
+newswire or economic calendar. See [Mira's news integration](docs/chat-news.md).
+
+
 Run `npm test` for the analysis-engine and chat tests. See
 [Chat Mode implementation notes](docs/chat-mode.md) for API and storage details.
 

@@ -139,6 +139,7 @@ const server = http.createServer(async (req, res) => {
       }
       return route.continue();
     });
+    await context.route("**/api/market-news", (route) => route.fulfill({ json: { type: "market_news", readOnly: true, status: "unavailable", checkedAt: new Date().toISOString(), items: [], sources: [] } }));
     await page.goto(origin + "/chat.html");
     await page.locator('#providerStatus[data-state="configured"]').waitFor();
     assert.equal(await page.locator("#useMarketContext").isChecked(), true);

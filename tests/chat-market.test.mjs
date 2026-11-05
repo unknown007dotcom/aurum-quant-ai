@@ -395,7 +395,7 @@ test("gold replies get actual server-fetched evidence while browser credentials,
   const result = await completeChat(
     {
       messages: [user("Give the latest XAU/USD quote")],
-      settings: { marketContext: true },
+      settings: { marketContext: true, newsContext: false },
       market: { price: 999999 },
       oandaApiToken: "client-secret",
       baseUrl: "https://evil.example",
@@ -412,7 +412,7 @@ test("gold replies get actual server-fetched evidence while browser credentials,
   assert.match(system, /market_closed/);
   assert.match(
     system,
-    /no web browsing, account-balance access or order-execution tools/,
+    /no arbitrary web browsing, account-balance access or order-execution tools/,
   );
   assert.ok(
     !/client-secret|999999|server-oanda-token|private-account|server-nvidia-token|evil\.example/.test(

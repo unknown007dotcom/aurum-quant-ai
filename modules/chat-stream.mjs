@@ -1,3 +1,5 @@
+import { normalizeNewsEvidence } from "./chat-news-evidence.mjs";
+
 // Shared, incremental SSE decoding. Network chunks are NOT event or UTF-8
 // boundaries. Used by the provider transport and the browser's chat reader.
 export async function* readEventStream(body, { signal, onChunk } = {}) {
@@ -80,6 +82,9 @@ const publicReply = (payload) => {
     content: payload.content.slice(0, 32000),
     model: typeof payload.model === "string" ? payload.model.slice(0, 180) : "",
     ...(payload.market ? { market: payload.market } : {}),
+    ...(normalizeNewsEvidence(payload.news, { limit: 6 })
+      ? { news: normalizeNewsEvidence(payload.news, { limit: 6 }) }
+      : {}),
     ...(payload.modelFallbackUsed === true ? { modelFallbackUsed: true } : {}),
   };
 };
@@ -133,6 +138,9 @@ export async function readChatResponse(response, onEvent, { signal } = {}) {
           typeof payload.model === "string" ? payload.model.slice(0, 180) : "",
         modelFallbackUsed: payload.modelFallbackUsed === true,
         ...(payload.market ? { market: payload.market } : {}),
+        ...(normalizeNewsEvidence(payload.news, { limit: 6 })
+          ? { news: normalizeNewsEvidence(payload.news, { limit: 6 }) }
+          : {}),
       });
     } else {
       if (typeof payload.text !== "string") throw interrupted();
