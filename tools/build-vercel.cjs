@@ -329,6 +329,45 @@ module.exports = (req, res) => {
     `Packaged ${fileList.size} runtime files (${warnings.size} optional dependency warnings); static output excludes private server data.`,
   );
   if (
+    process.env.AURUM_VERIFY_CHAT_BASELINE_ORIGIN ||
+    process.env.AURUM_VERIFY_LIVE_CHAT_STREAM === "1"
+  ) {
+    const {
+      verifyChatStreaming,
+      withPackagedChat,
+    } = require("./verify-live-chat-stream.cjs");
+    if (process.env.AURUM_VERIFY_CHAT_BASELINE_ORIGIN) {
+      // Diagnostic only: a broken existing deployment must not hide results
+      // from the candidate. Only public /api/chat is requested, never settings.
+      await verifyChatStreaming({
+        origin: process.env.AURUM_VERIFY_CHAT_BASELINE_ORIGIN,
+        label: "public-baseline",
+      });
+    }
+    if (process.env.AURUM_VERIFY_LIVE_CHAT_STREAM === "1") {
+      if (process.env.AURUM_VERIFY_CHAT_MODELS) {
+        // Optional, capped catalog-only diagnostics. A model's catalog entry
+        // alone is not evidence of a working completion endpoint.
+        await withPackagedChat(handler, (origin) =>
+          verifyChatStreaming({
+            origin,
+            label: "catalog-probes",
+            requestTimeoutMs: 20000,
+            modelIds:
+              process.env.AURUM_VERIFY_CHAT_MODELS.split(",").filter(Boolean),
+          }),
+        );
+      }
+      const report = await withPackagedChat(handler, (origin) =>
+        verifyChatStreaming({ origin, label: "packaged-candidate" }),
+      );
+      if (!report.ok)
+        throw new Error(
+          "Live streaming chat verification failed; inspect the safe LIVE-CHAT-STREAM diagnostics.",
+        );
+    }
+  }
+  if (
     process.env.AURUM_VERIFY_LIVE_AI === "1" ||
     process.env.AURUM_VERIFY_LIVE_MARKET === "1" ||
     process.env.AURUM_VERIFY_LIVE_TERMINAL_SKILLS === "1"

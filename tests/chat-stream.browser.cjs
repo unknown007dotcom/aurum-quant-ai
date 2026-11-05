@@ -120,8 +120,12 @@ async function run() {
       await page.locator('.message[data-streaming="true"]').waitFor();
       return request;
     };
-    const finish = async (request, text = "") => {
-      await command({ command: "finish", id: request.id, text });
+    const finish = async (request, text = "", keepTransportOpen = false) => {
+      await command({
+        command: keepTransportOpen ? "finish-without-close" : "finish",
+        id: request.id,
+        text,
+      });
       await page
         .locator('.message[data-streaming="true"]')
         .waitFor({ state: "detached" });
@@ -271,7 +275,12 @@ async function run() {
     );
     const summary =
       "\n\n**Takeaway:** keep the examples hypothetical and manage uncertainty.";
-    await finish(request, summary);
+    const terminalReceivedAt = Date.now();
+    await finish(request, summary, true);
+    assert.ok(
+      Date.now() - terminalReceivedAt < 5000,
+      "The completed answer must not wait for a socket/idle timeout",
+    );
     assert.equal(
       await page.locator("#messageScroll").evaluate((el) => el.scrollTop),
       0,

@@ -34,6 +34,43 @@ answer instead of duplicating it. Failed/stopped regeneration preserves an
 existing completed answer. A model fallback resets the in-flight draft before
 showing the new model's text, so two different answers are never concatenated.
 
+## Saved AI key and Chat models
+
+Chat continues to use the NVIDIA key in Aurum's protected server settings; no
+second key in browser storage or Vercel is required. This deployment enables
+**Nemotron 3.5 Lightning** as the Chat default and **MiniMax M3.1 Flash** as an
+alternative/fallback, after verifying real responses with that existing key.
+
+Server-side `chatModelIds` and `chatDefaultModelKey` select Chat's enabled models
+and default independently of analysis/trading settings. Only enabled IDs that are
+also in the current provider catalog can be requested. Browser payloads cannot
+override this policy. Old saved selections recover to the Chat default without
+removing history. With no explicit Chat policy, the previous full-catalog behavior
+is retained.
+
+## Timeouts and recovery
+
+The first-answer startup window is separate from the between-token idle limit.
+Earlier model candidates get up to 45 seconds to start visible answer text,
+reserving time for fallback; the final candidate can use the remaining generation
+budget. Once text starts, continued output can run beyond the startup window.
+Only a 20-second gap in answer tokens or the existing 110-second overall generation
+deadline ends that attempt. Catalog/market lookup happens before this generation
+budget, and the browser still has its independent 150-second request limit.
+
+Headers, heartbeat comments and private reasoning do not count as visible answer
+progress. A terminal provider `finish_reason` completes immediately after its last
+text delta, even when the connection stays open. A provider that rejects streaming
+gets one buffered compatibility request **within the same startup budget**, not a
+fresh timer. Authentication and rate limits still fail without retry storms.
+Reasoning models receive enough output budget for visible text. A token-limited
+fragment is retried within the existing bounds, not saved as a completed answer.
+
+Server-side `[chat-provider-attempt]` diagnostics record only model, error code,
+status, elapsed milliseconds and optional timeout phase. They never include keys,
+provider URLs, prompts, private reasoning or answer text. See the
+[timeout-recovery notes](chat-timeout-recovery.md) for release verification.
+
 ## Image area
 
 The assistant is named **Mira**, with a user-selected, AI-generated anime portrait shown by default in the right panel and matching small avatars in the conversation. Her name is used consistently in chat labels, exports, and the server-controlled AI prompt; she remains clearly identified as an AI assistant. Optional uploads support PNG, JPEG, and WebP up to 5 MB. Images are resized to at most 1,000 pixels on their longest edge, converted to WebP, and saved in browser storage. The image is decorative and is **not** attached to messages or sent to the AI provider. Uploading an image overrides the portrait only in this browser; **Restore Mira's portrait** returns to the bundled default. Invalid or unreadable saved images fall back to Mira.
@@ -62,7 +99,7 @@ The browser only calls same-origin `/api/chat`:
   - `start`: `{ model, modelFallbackUsed, market? }`. Starts/resets one provider attempt.
   - `delta`: `{ text }`. Visible answer text only; never private reasoning or raw provider events.
   - `done`: `{ content, model, market?, modelFallbackUsed? }`. Authoritative completed answer; persist it once.
-  - `error`: `{ code, message }`. Safe error after streaming starts. A stream ending without `done` is an interruption, not success.
+  - `error`: `{ code, message, timeoutPhase? }`. Safe error after streaming starts. A stream ending without `done` is an interruption, not success. Timeout phases are `first_token` (no answer started), `idle` (answer stalled), and `deadline` (overall generation limit). JSON errors preserve the same safe diagnostics.
 - Comment heartbeats keep the connection active during discovery/reasoning. `Cache-Control: no-cache, no-store, no-transform` and `X-Accel-Buffering: no` discourage intermediary buffering. Client disconnects cancel upstream generation; provider idle/absolute time limits remain in effect.
 - Invalid requests still return an appropriate HTTP status and JSON `{ message }` before streaming begins. Buffered-only providers remain supported, but cannot display text until their reply arrives.
 
@@ -85,6 +122,9 @@ npm run test:chat-stream # Real HTTP streaming, readable tables, Stop/retry and 
 npm run test:ai-ui       # Real terminal controller, mocked HTTP, no trading
 npm run test:chat-market # Market provenance, failure recovery, persistence and mobile UI
 node server.js           # Manual/browser verification at /chat.html
+# Opt-in: genuine provider requests to the public deployment, not mocks:
+npm run verify:live-chat-stream -- --require-incremental
+# Select a different deployment with AURUM_VERIFY_ORIGIN=https://your-app.example
 ```
 
 The chat tests use injected provider responses and never call a real AI provider. The streaming browser test runs the real local server/handler/transport with an IPC-gated fake upstream, proving that text and tables render before completion (not merely replaying a buffered response). Unit tests also cover split UTF-8/SSE frames, alignment, escaped pipes, unsafe HTML, cancellation, fallback resets, safe failures, Node/Worker parity and JSON compatibility. Live responses require a valid configured key, an accessible provider endpoint, and the deployed chat route. Browser interaction checks should cover history persistence, both successful and failed requests, retry/regenerate/stop, settings in outgoing requests, rename/export/delete, image upload/removal, and responsive drawer behavior.

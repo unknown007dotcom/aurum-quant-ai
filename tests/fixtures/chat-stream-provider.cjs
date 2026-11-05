@@ -79,6 +79,13 @@ process.on("message", (message) => {
   const stream = streams.get(message.id);
   if (stream && !stream.closed) {
     if (message.command === "chunk") delta(stream, message.text);
+    if (message.command === "finish-without-close") {
+      if (message.text) delta(stream, message.text);
+      write(stream, { choices: [{ delta: {}, finish_reason: "stop" }] });
+      stream.completed = true;
+      // Keep the transport open: the terminal choice must be enough for the
+      // real handler/browser to complete, cancel the reader and allow sending.
+    }
     if (message.command === "finish") {
       if (message.text) delta(stream, message.text);
       write(stream, { choices: [{ delta: {}, finish_reason: "stop" }] });

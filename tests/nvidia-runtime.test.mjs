@@ -288,7 +288,13 @@ const sseResponse = (chunks) =>
     { headers: { "content-type": "text/event-stream" } },
   );
 const hangingSseResponse = () =>
-  new Response(new ReadableStream({ start() {} }), {
+  new Response(new ReadableStream({ start(controller) {
+    // A stream stalled AFTER visible output, not a cold model awaiting its
+    // first answer (which now has its own startup window).
+    controller.enqueue(new TextEncoder().encode(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Partial answer" } }] })}\n\n`,
+    ));
+  } }), {
     headers: { "content-type": "text/event-stream" },
   });
 
@@ -750,4 +756,16 @@ test("directional output without actual levels is not accepted as a completed pl
     ),
     (error) => error.code === "invalid_analysis",
   );
+});
+
+test("current Nemotron and MiniMax reasoning models have room for a visible final answer", async () => {
+  for (const id of ["nvidia/nemotron-3.5-lightning-30b-a3b", "minimaxai/minimax-m3.1-flash"]) {
+    let sent;
+    await requestCompletion({ id, apiKey: "test-only", baseUrl: "https://provider.example/v1" }, [{ role: "user", content: "Explain a short concept." }], { maxTokens: 700, temperature: 0 }, async (_url, options) => {
+      sent = JSON.parse(options.body);
+      return Response.json({ choices: [{ message: { content: "A visible answer." }, finish_reason: "stop" }] });
+    });
+    assert.ok(sent.max_tokens >= 2048, "Do not spend a concise 700-token cap entirely on hidden reasoning");
+    assert.equal(sent.temperature, 0, "Keep the user's explicit temperature choice");
+  }
 });

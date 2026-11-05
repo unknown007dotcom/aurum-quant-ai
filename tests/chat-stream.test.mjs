@@ -494,3 +494,76 @@ test("Worker streams the same public protocol without waiting for the entire gen
     globalThis.fetch = realFetch;
   }
 });
+
+test("browser JSON and SSE errors preserve only safe timeout diagnostics", async () => {
+  for (const timeoutPhase of ["first_token", "idle", "deadline"]) {
+    const payload = {
+      code: "timeout",
+      timeoutPhase,
+      message: "Please retry.",
+      apiKey: "PRIVATE",
+      failures: [{ internal: "PRIVATE" }],
+    };
+    for (const response of [
+      Response.json(payload, { status: 504 }),
+      sse(event("error", payload)),
+    ])
+      await assert.rejects(readChatResponse(response), (error) => {
+        assert.equal(error.code, "timeout");
+        assert.equal(error.timeoutPhase, timeoutPhase);
+        assert.equal(error.message, "Please retry.");
+        assert.equal(error.apiKey, undefined);
+        assert.equal(error.failures, undefined);
+        return true;
+      });
+  }
+  await assert.rejects(
+    readChatResponse(
+      sse(
+        event("error", {
+          code: "https://private-provider.example/?key=PRIVATE",
+          timeoutPhase: "PRIVATE",
+        }),
+      ),
+    ),
+    (error) => {
+      assert.equal(error.code, undefined);
+      assert.equal(error.timeoutPhase, undefined);
+      return true;
+    },
+  );
+});
+
+test("chat opts into current-catalog recovery when legacy fallback model IDs are no longer listed", async () => {
+  const alternate = "mistralai/mistral-7b-instruct-v0.3";
+  const calls = [],
+    events = [];
+  const fetch = provider(
+    (body) => {
+      calls.push(body.model);
+      return body.model === model
+        ? Response.json({}, { status: 503 })
+        : sse(
+            providerEvent({
+              choices: [
+                {
+                  delta: { content: "A useful answer from a current model." },
+                  finish_reason: "stop",
+                },
+              ],
+            }),
+          );
+    },
+    [model, alternate],
+  );
+  const reply = await completeChat(input, settings, {}, fetch, {
+    onEvent: (event) => events.push(event),
+  });
+  assert.deepEqual(calls, [model, alternate]);
+  assert.equal(reply.model, alternate);
+  assert.equal(reply.modelFallbackUsed, true);
+  assert.equal(
+    events.filter((event) => event.type === "start").at(-1).model,
+    alternate,
+  );
+});

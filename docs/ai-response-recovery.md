@@ -1,5 +1,7 @@
 # AI response recovery — 24 October 2026
 
+> November follow-up: [Chat timeout recovery](chat-timeout-recovery.md) documents saved-key verification, retired/stalled model routing, reasoning budgets, and genuine streamed replies.
+
 > Follow-up: [Debate Council recovery](debate-recovery.md) restores the debate UI and bounded participant reviews, with 84 tests and post-deployment chat/debate browser verification. The results below document the earlier response-recovery release.
 
 ## Reproduced against the public production HTTP endpoints
