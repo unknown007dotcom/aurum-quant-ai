@@ -63,7 +63,8 @@ const frame = (name, payload) =>
       posts = [];
     let state = "available",
       newsRequests = 0,
-      networkFailure = false;
+      networkFailure = false,
+      unqualifiedTime = false;
     const snapshot = () => {
       const checkedAt = new Date().toISOString();
       return {
@@ -87,9 +88,17 @@ const frame = (name, payload) =>
                   sourceId: "investing-commodities",
                   source: "SPOOFED SOURCE",
                   topic: "gold",
-                  publishedAt: new Date(
-                    Date.now() - (state === "stale" ? 4 * 86400000 : 60000),
-                  ).toISOString(),
+                  publishedAt: unqualifiedTime
+                    ? null
+                    : new Date(
+                        Date.now() - (state === "stale" ? 4 * 86400000 : 60000),
+                      ).toISOString(),
+                  publishedTimeText: unqualifiedTime
+                    ? new Date(Date.now() - 60000)
+                        .toISOString()
+                        .slice(0, 19)
+                        .replace("T", " ")
+                    : null,
                   fetchedAt: checkedAt,
                   cached: state === "partial" || state === "stale",
                   privateKey: "PRIVATE",
@@ -100,7 +109,9 @@ const frame = (name, payload) =>
                   title: "TEST fixture: Federal Reserve policy update",
                   url: "https://www.federalreserve.gov/newsevents/pressreleases/test-fixture.htm",
                   sourceId: "fed-policy",
-                  publishedAt: null,
+                  publishedAt: unqualifiedTime
+                    ? new Date(Date.now() - 60000).toISOString()
+                    : null,
                   fetchedAt: checkedAt,
                 },
                 {
@@ -274,6 +285,31 @@ const frame = (name, payload) =>
       "PASS: News context reaches the request, with safe source provenance persisted and copied alongside the answer.",
     );
 
+    await page.locator("#conversationMenu summary").click();
+    const downloadEvent = page.waitForEvent("download");
+    await page.locator("#exportChatButton").click();
+    const download = await downloadEvent;
+    const chunks = [];
+    for await (const chunk of await download.createReadStream())
+      chunks.push(chunk);
+    const exported = Buffer.concat(chunks).toString();
+    assert.ok(
+      exported.includes("News sources for this reply") &&
+        exported.includes("https://www.federalreserve.gov"),
+    );
+    assert.doesNotMatch(exported, /PRIVATE|javascript:/);
+    unqualifiedTime = true;
+    await page.locator("#refreshNewsButton").click();
+    await page.waitForFunction(() =>
+      document
+        .getElementById("newsList")
+        .textContent.includes("timezone not supplied"),
+    );
+    assert.equal(
+      await page.locator("#newsList time").first().getAttribute("datetime"),
+      null,
+    );
+    unqualifiedTime = false;
     for (const next of ["partial", "stale", "empty", "unavailable"]) {
       state = next;
       await page.locator("#refreshNewsButton").click();
@@ -302,14 +338,12 @@ const frame = (name, payload) =>
       await page
         .getByRole("button", { name: "Open market news", exact: true })
         .click();
-      const layout = await page
-        .locator("#marketNewsPanel")
-        .evaluate((el) => ({
-          left: el.getBoundingClientRect().left,
-          right: el.getBoundingClientRect().right,
-          width: el.getBoundingClientRect().width,
-          overflow: document.documentElement.scrollWidth > innerWidth,
-        }));
+      const layout = await page.locator("#marketNewsPanel").evaluate((el) => ({
+        left: el.getBoundingClientRect().left,
+        right: el.getBoundingClientRect().right,
+        width: el.getBoundingClientRect().width,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+      }));
       assert.equal(layout.overflow, false, `Page overflow at ${width}px`);
       assert.ok(
         layout.left >= 0 && layout.right <= width && layout.width > 180,

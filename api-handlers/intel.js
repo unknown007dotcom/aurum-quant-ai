@@ -14,7 +14,7 @@ module.exports = async function handler(req, res) {
         response.rules = {
           confluence: { primary: 3, secondary: 2, tertiary: 1, minScore: 7 },
           tds: { highConviction: 7 },
-          version: "Institutional 2.0 (Markdown)"
+          version: "Institutional 2.0 (Markdown)",
         };
       }
     }
@@ -25,7 +25,8 @@ module.exports = async function handler(req, res) {
       // analysis consumers must not treat headlines as scheduled high-impact data.
       response.news = [];
       response.calendarStatus = "unavailable";
-      response.newsFeed = await (await import("../lib/market-news.mjs")).getMarketNews();
+      response.newsEndpoint = "/api/market-news";
+      // Legacy analysis calls do not acquire a new RSS/network dependency.
     }
 
     res.status(200).json(response);
