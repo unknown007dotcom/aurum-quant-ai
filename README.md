@@ -37,6 +37,14 @@ the right. On smaller screens the sidebars become keyboard-accessible drawers.
 AI replies now appear as they are generated, and Markdown tables have clear
 headers, row spacing, and horizontal scrolling on smaller screens. Stop preserves
 labeled partial text for retry; existing saved chats use the improved table layout.
+Chat uses the key already saved in Aurum's protected settings. Its verified model
+selection is independent of trading/analysis: Nemotron Lightning by default, with
+MiniMax Flash available as an alternative. Older Chat selections recover without
+losing conversation content.
+Streaming startup, token-idle and overall deadlines are handled separately, so
+healthy output is not cut off by a startup timer. For real deployed-provider checks,
+run the opt-in `npm run verify:live-chat-stream`; see the
+[timeout-recovery notes](docs/chat-timeout-recovery.md).
 
 Your assistant **Mira** has a default anime portrait in the right panel.
 You can also upload a PNG, JPEG, or WebP and restore Mira's portrait at any time; it stays in this browser and is not sent

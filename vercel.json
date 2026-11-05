@@ -10,5 +10,5 @@
     }
   ],
   "framework": null,
-  "buildCommand": "AURUM_VERIFY_ORIGIN=https://aurum-quant-ai.vercel.app npm run verify:live-chat-stream -- --require-incremental && npm run build:vercel"
+  "buildCommand": "npm run build:vercel"
 }

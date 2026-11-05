@@ -21,7 +21,7 @@ import {
   marketEvidenceText,
 } from "./modules/chat-market-evidence.mjs";
 import { CHAT_ASSISTANT, resolveChatArtwork } from "./modules/chat-persona.mjs";
-import { readChatResponse } from "./modules/chat-stream.mjs";
+import { readChatResponse } from "./modules/chat-stream.mjs?v=2";
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) =>
