@@ -118,7 +118,7 @@ const CLOUDFLARE_BACKEND = process.env.CLOUDFLARE_WORKER_URL || "https://aurum-q
 async function serveApiRoute(nodeReq, nodeRes, requestUrl) {
   const relativeRoute = requestUrl.pathname.replace(/^\/api\//, "");
   // Match production: all AI execution and AI settings use the same Node backend.
-  const localAiHandlers = { "market-news": "market-news", intel: "intel", chat: "chat", "ai-decision": "ai-decision", "ai-health": "ai-health", settings: "settings" };
+  const localAiHandlers = { "market-news": "market-news", "economic-calendar": "economic-calendar", intel: "intel", chat: "chat", "ai-decision": "ai-decision", "ai-health": "ai-health", settings: "settings" };
   if (Object.hasOwn(localAiHandlers, relativeRoute)) {
     nodeReq.query = Object.fromEntries(requestUrl.searchParams.entries());
     const chunks = [];

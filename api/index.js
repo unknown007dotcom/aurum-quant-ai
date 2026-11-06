@@ -3,6 +3,7 @@ const path = require("node:path");
 const routes = {
   "chat": require("../api-handlers/chat"),
   "market-news": require("../api-handlers/market-news"),
+  "economic-calendar": require("../api-handlers/economic-calendar"),
   "ai-decision": require("../api-handlers/ai-decision"),
   "ai-health": require("../api-handlers/ai-health"),
   "auto-analyze": require("../api-handlers/auto-analyze"),

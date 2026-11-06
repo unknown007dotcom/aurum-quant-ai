@@ -62,7 +62,10 @@ about every three minutes while visible, labels source dates/uncertain timestamp
 and lets Mira answer with linked source snapshots. The **Gold & market news**
 switch disables news context and polling per conversation. No paid news API key
 is needed; existing hosting/AI usage limits still apply. This is not an instant
-newswire or economic calendar. See [Mira's news integration](docs/chat-news.md).
+newswire. The same desk also shows **upcoming events** — high-impact US reports
+(CPI, Employment Situation, PPI…), FOMC meetings and Fed speeches from the
+official BLS iCal schedule and Federal Reserve calendar for the next 30 days.
+See [Mira's news integration](docs/chat-news.md).
 
 
 Run `npm test` for the analysis-engine and chat tests. See

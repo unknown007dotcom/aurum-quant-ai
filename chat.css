@@ -3004,6 +3004,66 @@ a {
   cursor: pointer;
   text-align: left;
 }
+.events-block {
+  margin-top: 10px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 9px;
+  min-width: 0;
+}
+.events-heading {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gold);
+}
+.events-status {
+  margin-bottom: 6px;
+}
+.events-list {
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding-right: 3px;
+}
+.event-item .event-when {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  margin-bottom: 3px;
+}
+.event-time {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+.event-countdown {
+  color: var(--faint);
+  font-size: 9px;
+}
+.event-title {
+  font-size: 11px;
+}
+.event-impact {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.event-impact-high {
+  color: var(--warning-text);
+  border-color: var(--warning-text);
+}
+.event-impact-medium {
+  color: var(--gold);
+  border-color: var(--gold-border);
+}
 .news-evidence {
   margin: 12px 0;
   padding: 10px 12px;
