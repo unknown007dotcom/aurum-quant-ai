@@ -755,12 +755,17 @@ test("Stop during a shared feed lookup prevents any later AI generation", async 
 
 const genericNewsQuestions = [
   "Can you access live news feeds?",
+  "Do you have a news feed?",
+  "Does Mira have news access?",
   "What is the latest news?",
   "What's the latest news?",
   "What’s the latest news?",
   "Show me the latest news",
   "Mira, please show me today's headlines.",
   "Give me a news update.",
+  "I need news.",
+  "I want headlines.",
+  "I asked for news.",
   "Can you fetch current headlines?",
   "Do you have access to real-time news?",
   "Why can't you access the news feed?",
@@ -797,6 +802,7 @@ test("generic-news expansion does not fetch for definitions, writing exercises, 
     "Latest celebrity news",
     "Show me the latest cricket news",
     "Latest technology news",
+    "I have good news!",
     "Update my profile",
     "What's new in this code?",
     "Please don't fetch the news.",
@@ -854,7 +860,12 @@ test("short follow-ups retain a generic news thread but stop after a topic chang
 });
 
 test("plain generic questions attach actual server news to the model and to SSE provenance", async () => {
-  for (const content of genericNewsQuestions.slice(0, 3)) {
+  for (const content of [
+    "Can you access live news feeds?",
+    "What is the latest news?",
+    "Show me the latest news",
+    "Do you have a news feed?",
+  ]) {
     const mock = chatProvider();
     const events = [];
     const reply = await readChatResponse(

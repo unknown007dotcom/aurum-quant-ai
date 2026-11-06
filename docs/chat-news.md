@@ -189,3 +189,53 @@ real-feed and real-AI checks successfully: all six sources responded; the comple
 answer cited supplied sources and explicitly qualified the gold headline's
 unverified timestamp and price. No temporary verification flag remains in the
 normal production build command.
+
+## Generic news requests and access questions — 6 November repair
+
+Normal questions such as “What is the latest news?”, “Show me the latest news”,
+and “Can you access live news feeds?” now trigger the existing curated RSS lookup
+without requiring `gold`, `XAU/USD` or `market` keywords. Generic requests use the
+app's gold/USD/macro scope, not unrestricted world-news browsing. Straight and
+curly apostrophes, news-feed wording, and common request/access phrases are handled.
+
+A short “Try again” or “Tell me more” continues the user's latest news topic.
+An unrelated user question ends that thread; an assistant's incidental news mention
+or old access denial does not establish a new lookup request. Definitions,
+translation/writing exercises, unrelated news topics, direct no-lookup requests,
+and the saved `newsContext: false` preference remain excluded. Per-message
+no-lookup wording suppresses Chat's lookup for that turn; the settings toggle
+controls the independent news-desk polling.
+
+Mira's instructions now distinguish:
+- integration enabled but no lookup requested this turn;
+- lookup disabled, with the **Gold & market news** setting identified;
+- usable or partial source data, which must not become a blanket “no news access” claim;
+- older/cached items, empty results and genuine lookup failures.
+
+This does not add general browsing, a premium instant wire, new sources or keys.
+The existing source, freshness, citation, cancellation and privacy safeguards stay
+in place. Older assistant messages cannot override current settings/evidence.
+
+Five new regression groups failed on the old code and passed after repair. The
+real packaged-HTTP gate (`dpl_CebQfAiqpKFZTpnAuGjsEH68rpw7`, `dc92c78`) then passed
+all four literal scenarios, with genuine streamed source-cited replies:
+
+| Literal request | Completion | Visible deltas |
+| --- | ---: | ---: |
+| Can you access live news feeds? | 15.360 s | 159 |
+| What is the latest news? | 17.327 s | 213 |
+| Show me the latest news | 16.969 s | 240 |
+| Try again, after a simulated old access denial | 29.515 s | 172 |
+
+The access answer began “Yes, I can access curated news headlines…” and included
+a sourced example. These are observations, not latency guarantees. The verifier
+sends the exact questions without appending market keywords, marker instructions
+or citation hints that would mask the original bug. It uses synthetic history
+only and disables OANDA lookup. Public post-deployment results are recorded in
+[PR #6](https://github.com/unknown007dotcom/aurum-quant-ai/pull/6).
+
+```sh
+npm run verify:news-routing
+# Or, explicitly gate a packaged release:
+AURUM_VERIFY_NEWS_ROUTING=1 npm run build:vercel
+```
