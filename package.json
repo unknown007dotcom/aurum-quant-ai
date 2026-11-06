@@ -19,7 +19,8 @@
     "test:chat-stream": "node tests/chat-stream.browser.cjs",
     "verify:live-chat-stream": "node tools/verify-live-chat-stream.cjs",
     "test:chat-news": "node tests/chat-news.browser.cjs",
-    "verify:live-news": "node tools/verify-live-news.cjs"
+    "verify:live-news": "node tools/verify-live-news.cjs",
+    "verify:news-routing": "node tools/verify-live-news.cjs --routing"
   },
   "dependencies": {
     "fast-xml-parser": "5.12.0",

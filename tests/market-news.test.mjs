@@ -752,3 +752,188 @@ test("Stop during a shared feed lookup prevents any later AI generation", async 
   await rejected;
   assert.equal(mock.providerBodies.length, 0);
 });
+
+const genericNewsQuestions = [
+  "Can you access live news feeds?",
+  "What is the latest news?",
+  "What's the latest news?",
+  "What’s the latest news?",
+  "Show me the latest news",
+  "Mira, please show me today's headlines.",
+  "Give me a news update.",
+  "Can you fetch current headlines?",
+  "Do you have access to real-time news?",
+  "Why can't you access the news feed?",
+  "The live news feed isn't working.",
+  "Are you able to read RSS feeds?",
+  "Summarise the news for me.",
+  "Any updates?",
+];
+
+test("natural generic news and access questions do not require gold/market keywords", () => {
+  const skipped = genericNewsQuestions.filter(
+    (content) => !wantsNewsContext([{ role: "user", content }]),
+  );
+  assert.deepEqual(
+    skipped,
+    [],
+    "Normal news requests must reach the existing feed",
+  );
+  for (const content of genericNewsQuestions)
+    assert.equal(
+      wantsNewsContext([{ role: "user", content }], false),
+      false,
+      "The saved opt-out must always win",
+    );
+});
+
+test("generic-news expansion does not fetch for definitions, writing exercises, unrelated topics or explicit no-lookups", () => {
+  for (const content of [
+    "What is news?",
+    "What is a news feed?",
+    "How do RSS feeds work?",
+    "Translate the phrase 'latest news' into Hindi.",
+    "Write a fictional news story.",
+    "Latest celebrity news",
+    "Show me the latest cricket news",
+    "Latest technology news",
+    "Update my profile",
+    "What's new in this code?",
+    "Please don't fetch the news.",
+    "Do not check the latest gold news.",
+  ])
+    assert.equal(wantsNewsContext([{ role: "user", content }]), false, content);
+});
+
+test("short follow-ups retain a generic news thread but stop after a topic change", () => {
+  const history = [
+    { role: "user", content: "What is the latest news?" },
+    {
+      role: "assistant",
+      content: "An old answer incorrectly said I cannot access live news.",
+    },
+  ];
+  for (const content of [
+    "Try again",
+    "Tell me more",
+    "What about the impact?",
+    "Why?",
+  ])
+    assert.equal(
+      wantsNewsContext([...history, { role: "user", content }]),
+      true,
+      content,
+    );
+  assert.equal(
+    wantsNewsContext([
+      ...history,
+      { role: "user", content: "Tell me more" },
+      { role: "assistant", content: "Here are details." },
+      { role: "user", content: "Why?" },
+    ]),
+    true,
+  );
+  assert.equal(
+    wantsNewsContext([
+      ...history,
+      { role: "user", content: "Explain photosynthesis." },
+      { role: "assistant", content: "Plants use light." },
+      { role: "user", content: "Why?" },
+    ]),
+    false,
+  );
+  assert.equal(
+    wantsNewsContext([
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "I can discuss market news." },
+      { role: "user", content: "Tell me more" },
+    ]),
+    false,
+    "Assistant wording alone must not switch the user's topic",
+  );
+});
+
+test("plain generic questions attach actual server news to the model and to SSE provenance", async () => {
+  for (const content of genericNewsQuestions.slice(0, 3)) {
+    const mock = chatProvider();
+    const events = [];
+    const reply = await readChatResponse(
+      new Response(
+        createChatStream(
+          {
+            messages: [{ role: "user", content }],
+            stream: true,
+            settings: { marketContext: false, newsContext: true },
+          },
+          settings,
+          {},
+          mock.fetch,
+        ),
+        { headers: CHAT_STREAM_HEADERS },
+      ),
+      (event) => events.push(event),
+    );
+    assert.equal(mock.feed.calls.length, NEWS_FEEDS.length, content);
+    assert.equal(reply.news?.items[0].citation, "N1");
+    assert.deepEqual(events[0].news, reply.news);
+    const sent = mock.providerBodies[0].messages;
+    assert.match(sent.at(-2).content, /^NEWS_DATA/);
+    assert.equal(sent.at(-1).content, content);
+    assert.doesNotMatch(JSON.stringify(sent), /test-private-ai-key/);
+  }
+});
+
+test("news capability instructions distinguish enabled, disabled, usable, partial and failed lookups", () => {
+  assert.match(
+    newsSystemInstructions(null, true),
+    /RSS.*enabled|enabled.*RSS/i,
+  );
+  assert.match(
+    newsSystemInstructions(null, true),
+    /no lookup|not.*fetched|not.*performed/i,
+  );
+  assert.match(newsSystemInstructions(null, false), /Gold & market news/);
+  const partial = newsSystemInstructions(
+    { status: "partial", items: [{ citation: "N1" }] },
+    true,
+  );
+  assert.match(
+    partial,
+    /do not.*(?:lack|no).*news.*access|do not.*(?:lack|no).*access.*news/i,
+  );
+  assert.match(partial, /earlier.*(?:denial|access)|older.*(?:denial|access)/i);
+  const unavailable = newsSystemInstructions(
+    { status: "unavailable", items: [] },
+    true,
+  );
+  assert.match(
+    unavailable,
+    /lookup.*(?:failed|unavailable)|lookup.*not.*usable/i,
+  );
+});
+
+test("retrying after an old access denial supplies current news instead of repeating that history", async () => {
+  const mock = chatProvider();
+  const reply = await completeChat(
+    {
+      ...question,
+      messages: [
+        { role: "user", content: "What is the latest news?" },
+        { role: "assistant", content: "I cannot access live news feeds." },
+        { role: "user", content: "Try again" },
+      ],
+    },
+    settings,
+    {},
+    mock.fetch,
+  );
+  assert.equal(mock.feed.calls.length, NEWS_FEEDS.length);
+  assert.equal(reply.news?.items[0].citation, "N1");
+  const sent = mock.providerBodies[0].messages;
+  assert.equal(sent.at(-1).content, "Try again");
+  assert.match(sent.at(-2).content, /^NEWS_DATA/);
+  assert.match(
+    sent[0].content,
+    /Earlier assistant denials of news access do not override/,
+  );
+});

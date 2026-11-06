@@ -7,6 +7,9 @@ async function verifyLiveNews({
     "https://aurum-quant-ai.vercel.app",
   fetchImpl = globalThis.fetch,
   includeChat = true,
+  question = null,
+  history = [],
+  requireAccessAcknowledgement = false,
   emit = (record) => console.log("[LIVE-NEWS] " + JSON.stringify(record)),
 } = {}) {
   const { normalizeNewsEvidence, newsItemAge } = await import(
@@ -62,9 +65,12 @@ async function verifyLiveNews({
     body: JSON.stringify({
       stream: true,
       messages: [
+        ...history,
         {
           role: "user",
-          content: `Begin your reply with the confirmation code ${marker}; this code is not a news item or source identifier. What recent news could affect XAU/USD or USD markets? Summarize at most two supplied headlines, cite their N identifiers, name the sources and dates, and distinguish reported news from possible market implications. Disclose older items or incomplete coverage. Do not invent a current price, a full article, or a forecast.`,
+          content:
+            question ??
+            `Begin your reply with the confirmation code ${marker}; this code is not a news item or source identifier. What recent news could affect XAU/USD or USD markets? Summarize at most two supplied headlines, cite their N identifiers, name the sources and dates, and distinguish reported news from possible market implications. Disclose older items or incomplete coverage. Do not invent a current price, a full article, or a forecast.`,
         },
       ],
       settings: {
@@ -84,16 +90,29 @@ async function verifyLiveNews({
   const evidence = normalizeNewsEvidence(reply.news, { limit: 6 });
   const refs = [...new Set(reply.content.match(/\bN\d+\b/g) || [])];
   const allowed = new Set(evidence?.items.map((item) => item.citation) || []);
+  const answerText = reply.content.replace(/[*_`#]/g, "").replace(/[‘’]/g, "'");
+  const acknowledgesNewsAccess =
+    /\byes\b|\bi can\b|\bi (?:do )?have access\b|\b(?:can|able to) (?:read|access|use|retrieve|fetch|show)\b/i.test(
+      answerText,
+    );
+  const deniesNewsAccess =
+    /\bi (?:cannot|can't|am unable to) (?:directly )?(?:access|fetch|read|retrieve|check) (?:(?:the|any|a|current|live|latest|real[- ]time|rss) )*(?:news(?: feeds?)?|headlines)\b|\bi (?:do not|don't) have (?:(?:any|current|live|real[- ]time|rss) )*(?:access to (?:live |current )?news|news(?: feed)? access)\b/i.test(
+      answerText,
+    );
   const record = {
-    check: "mira-news-answer",
+    check: question ? "literal-news-routing" : "mira-news-answer",
+    ...(question ? { question, acknowledgesNewsAccess, deniesNewsAccess } : {}),
     ok:
       Boolean(evidence?.items.length) &&
       refs.length > 0 &&
       refs.every((ref) => allowed.has(ref)) &&
-      reply.content
-        .trim()
-        .replace(/^[*`#\s]+/, "")
-        .startsWith(marker) &&
+      (question !== null ||
+        reply.content
+          .trim()
+          .replace(/^[*`#\s]+/, "")
+          .startsWith(marker)) &&
+      (!requireAccessAcknowledgement || acknowledgesNewsAccess) &&
+      (!deniesNewsAccess || acknowledgesNewsAccess) &&
       reply.content.length > 100 &&
       deltas > 0,
     model: reply.model,
@@ -176,11 +195,50 @@ async function withPackagedNewsApi(handler, run) {
     await new Promise((resolve) => server.close(resolve));
   }
 }
-module.exports = { verifyLiveNews, withPackagedNewsApi };
-if (require.main === module)
-  verifyLiveNews({ includeChat: !process.argv.includes("--feeds-only") }).catch(
-    (error) => {
-      console.error(error.message);
-      process.exitCode = 1;
-    },
+// These are intentionally literal user questions. Do not append gold/market
+// keywords, marker requests or citation instructions: those masked the old bug.
+const NEWS_ROUTING_QUESTIONS = Object.freeze([
+  "Can you access live news feeds?",
+  "What is the latest news?",
+  "Show me the latest news",
+]);
+async function verifyNewsRouting(options = {}) {
+  const results = [];
+  for (const [index, question] of NEWS_ROUTING_QUESTIONS.entries())
+    results.push(
+      await verifyLiveNews({
+        ...options,
+        includeChat: true,
+        question,
+        requireAccessAcknowledgement: index === 0,
+      }),
+    );
+  results.push(
+    await verifyLiveNews({
+      ...options,
+      includeChat: true,
+      question: "Try again",
+      requireAccessAcknowledgement: false,
+      history: [
+        { role: "user", content: "What is the latest news?" },
+        { role: "assistant", content: "I cannot access live news feeds." },
+      ],
+    }),
   );
+  return { ok: true, results, tradesExecuted: false };
+}
+module.exports = {
+  verifyLiveNews,
+  verifyNewsRouting,
+  NEWS_ROUTING_QUESTIONS,
+  withPackagedNewsApi,
+};
+if (require.main === module) {
+  const run = process.argv.includes("--routing")
+    ? verifyNewsRouting()
+    : verifyLiveNews({ includeChat: !process.argv.includes("--feeds-only") });
+  run.catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
