@@ -1,4 +1,5 @@
 import { getMarketNews } from "../../lib/market-news.mjs";
+import { getUpcomingEvents } from "../../lib/economic-calendar.mjs";
 import { AnalysisEngine } from "../../modules/analysis-engine.js";
 import { activeChatConfiguration, completeChat, validateChatRequest, ChatError } from "../../lib/chat-service.mjs";
 import { createChatStream, CHAT_STREAM_HEADERS } from "../../lib/chat-stream.mjs";

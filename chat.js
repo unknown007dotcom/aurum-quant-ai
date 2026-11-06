@@ -69,6 +69,8 @@ const newsPanel = createNewsPanel({
   sources: $("newsSources"),
   refreshButton: $("refreshNewsButton"),
   askButton: $("askNewsButton"),
+  eventsList: $("eventsList"),
+  eventsStatus: $("eventsStatus"),
 });
 
 function toast(message) {

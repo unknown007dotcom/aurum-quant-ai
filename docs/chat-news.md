@@ -23,6 +23,32 @@ economic-consensus calendar, full-article browser, verified current-price feed o
 trading signal. Mira separates headline reports from conditional interpretation;
 prices require the existing timestamped OANDA context. Chat does not execute orders.
 
+## Upcoming events (economic calendar)
+
+The news desk also lists **upcoming events** that can affect gold/USD: scheduled
+US reports (CPI, Employment Situation, PPI, and other BLS releases), FOMC
+meetings/press conferences and upcoming Fed speeches. Sources are official,
+public and keyless:
+
+| Source | Feed |
+| --- | --- |
+| BLS release schedule (iCal) | https://www.bls.gov/schedule/news_release/bls.ics |
+| Federal Reserve monthly calendars | https://www.federalreserve.gov/newsevents/2026-november.htm (current and next month) |
+| Federal Reserve speeches feed | https://www.federalreserve.gov/feeds/speeches.xml |
+
+`GET /api/economic-calendar` returns a bounded read-only snapshot:
+`type: "economic_calendar"`, `readOnly: true`, `status`, `checkedAt`, `cached`,
+`horizonDays: 30`, `events` (at most 24, sorted by start time) with title,
+canonical HTTPS source link, source identity, kind (`report`/`meeting`/
+`speech`/`release`), impact label (`high`/`medium`), `startsAt` UTC time and
+`cached` flag, plus per-source reachability. It is GET-only and accepts no
+client URLs or query parameters. Events are upcoming only (a one-hour grace
+for just-started items), low-impact routine releases are filtered out, and US
+Eastern times from BLS/Fed schedules are converted with the DST rule. The
+desk polls about every 10 minutes while visible; the server caches each source
+for 10 minutes and keeps a last-successful snapshot for at most 60 minutes,
+labeled cached. Scheduled times can change — this is a schedule, not a signal.
+
 ## Public sources and cost
 
 Fixed server-side feed URLs, with no news API key or subscription:

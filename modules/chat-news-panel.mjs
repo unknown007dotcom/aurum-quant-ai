@@ -7,6 +7,12 @@ import {
   NEWS_REFRESH_MS,
   NEWS_MAX_CACHE_AGE_MS,
 } from "./chat-news-evidence.mjs";
+import {
+  normalizeCalendarEvidence,
+  calendarStatusText,
+  calendarCountdown,
+  CALENDAR_MAX_CACHE_AGE_MS,
+} from "./economic-calendar-evidence.mjs";
 
 const node = (tag, className, text) => {
   const el = document.createElement(tag);
@@ -194,6 +200,30 @@ export function createNewsPanel({
         return row;
       }),
     );
+    if (eventsList && eventsStatus) {
+      const calendarDescription = calendar
+        ? calendarStatusText(calendar)
+        : { state: "loading", label: "Checking upcoming events…", detail: "" };
+      eventsStatus.textContent = `${calendarDescription.label}${calendarDescription.detail ? `. ${calendarDescription.detail}` : ""}`;
+      const signature = calendar
+        ? JSON.stringify(
+            calendar.events.map((event) => [
+              event.id,
+              event.title,
+              event.startsAt,
+              event.impact,
+              event.kind,
+              event.cached,
+            ]),
+          )
+        : "";
+      if (signature !== eventsSignature) {
+        eventsList.replaceChildren(
+          ...(calendar?.events || []).map((event) => eventLink(event)),
+        );
+        eventsSignature = signature;
+      }
+    }
   }
   function schedule() {
     clearTimeout(timer);
@@ -213,34 +243,73 @@ export function createNewsPanel({
     refreshButton.disabled = true;
     panel.setAttribute("aria-busy", "true");
     status.textContent = "Checking public feeds…";
+    const loadNews = async () => {
+      try {
+        const response = await fetchImpl("/api/market-news", {
+          headers: { Accept: "application/json" },
+          signal: active.signal,
+        });
+        const value = normalizeNewsEvidence(await response.json());
+        if (!response.ok || !value) throw new Error("News unavailable.");
+        if (!enabled || generation !== requestGeneration) return;
+        snapshot = value;
+      } catch {
+        if (!enabled || generation !== requestGeneration) return;
+        snapshot =
+          snapshot &&
+          Date.now() - Date.parse(snapshot.checkedAt) <= NEWS_MAX_CACHE_AGE_MS
+            ? {
+                ...snapshot,
+                status: "stale",
+                cached: true,
+                items: snapshot.items.map((item) => ({ ...item, cached: true })),
+              }
+            : {
+                type: "market_news",
+                readOnly: true,
+                status: "unavailable",
+                checkedAt: new Date().toISOString(),
+                items: [],
+                sources: [],
+              };
+      }
+    };
+    const loadCalendar = async () => {
+      try {
+        const response = await fetchImpl("/api/economic-calendar", {
+          headers: { Accept: "application/json" },
+          signal: active.signal,
+        });
+        const value = normalizeCalendarEvidence(await response.json());
+        if (!response.ok || !value) throw new Error("Events unavailable.");
+        if (!enabled || generation !== requestGeneration) return;
+        calendar = value;
+      } catch {
+        if (!enabled || generation !== requestGeneration) return;
+        calendar =
+          calendar &&
+          Date.now() - Date.parse(calendar.checkedAt) <= CALENDAR_MAX_CACHE_AGE_MS
+            ? {
+                ...calendar,
+                status: "stale",
+                cached: true,
+                events: calendar.events.map((event) => ({
+                  ...event,
+                  cached: true,
+                })),
+              }
+            : {
+                type: "economic_calendar",
+                readOnly: true,
+                status: "unavailable",
+                checkedAt: new Date().toISOString(),
+                events: [],
+                sources: [],
+              };
+      }
+    };
     try {
-      const response = await fetchImpl("/api/market-news", {
-        headers: { Accept: "application/json" },
-        signal: active.signal,
-      });
-      const value = normalizeNewsEvidence(await response.json());
-      if (!response.ok || !value) throw new Error("News unavailable.");
-      if (!enabled || generation !== requestGeneration) return;
-      snapshot = value;
-    } catch {
-      if (!enabled || generation !== requestGeneration) return;
-      snapshot =
-        snapshot &&
-        Date.now() - Date.parse(snapshot.checkedAt) <= NEWS_MAX_CACHE_AGE_MS
-          ? {
-              ...snapshot,
-              status: "stale",
-              cached: true,
-              items: snapshot.items.map((item) => ({ ...item, cached: true })),
-            }
-          : {
-              type: "market_news",
-              readOnly: true,
-              status: "unavailable",
-              checkedAt: new Date().toISOString(),
-              items: [],
-              sources: [],
-            };
+      await Promise.all([loadNews(), loadCalendar()]);
     } finally {
       clearTimeout(timeout);
       if (controller === active) controller = null;
