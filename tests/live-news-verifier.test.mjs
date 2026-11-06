@@ -129,3 +129,81 @@ test("packaged news verification does not expose settings or trading endpoints",
   );
   assert.equal(calls, 1);
 });
+
+test("routing verification sends the exact generic questions without market or marker hints", async () => {
+  const { verifyNewsRouting, NEWS_ROUTING_QUESTIONS } = createRequire(
+    import.meta.url,
+  )("../tools/verify-live-news.cjs");
+  const sent = [],
+    records = [];
+  const result = await verifyNewsRouting({
+    origin: "https://app.example",
+    emit: (record) => records.push(record),
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("/api/market-news")) return Response.json(feed());
+      assert.equal(url, "https://app.example/api/chat");
+      const body = JSON.parse(options.body);
+      sent.push(body.messages.at(-1).content);
+      if (sent.length <= NEWS_ROUTING_QUESTIONS.length)
+        assert.deepEqual(body.messages, [
+          { role: "user", content: NEWS_ROUTING_QUESTIONS[sent.length - 1] },
+        ]);
+      else
+        assert.deepEqual(body.messages, [
+          { role: "user", content: "What is the latest news?" },
+          { role: "assistant", content: "I cannot access live news feeds." },
+          { role: "user", content: "Try again" },
+        ]);
+      assert.equal(body.settings.newsContext, true);
+      assert.equal(body.settings.marketContext, false);
+      assert.equal(options.headers.Authorization, undefined);
+      const news = feed();
+      news.items[0].citation = "N1";
+      const content =
+        "Yes, I can read the curated RSS headlines supplied by Aurum. The provided gold/dollar headline [N1] is a report, not a verified current quote or a guaranteed price move.";
+      return new Response(
+        event("start", { model: "test", news }) +
+          event("delta", { text: content }) +
+          event("done", { model: "test", content, news }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(sent, [...NEWS_ROUTING_QUESTIONS, "Try again"]);
+  assert.ok(
+    records
+      .filter((record) => record.check === "literal-news-routing")
+      .every((record) => record.ok && record.acknowledgesNewsAccess),
+  );
+});
+
+test("literal access verification rejects missing news evidence and blanket access denials", async () => {
+  for (const attachNews of [false, true]) {
+    await assert.rejects(
+      verifyLiveNews({
+        origin: "https://app.example",
+        question: "Can you access live news feeds?",
+        requireAccessAcknowledgement: true,
+        emit() {},
+        fetchImpl: async (url) => {
+          if (url.endsWith("/api/market-news")) return Response.json(feed());
+          const news = feed();
+          news.items[0].citation = "N1";
+          const content =
+            "I cannot access live news feeds. Please check a publisher yourself for a current update; here is a source placeholder [N1] rather than a genuinely accessed news answer.";
+          return new Response(
+            event("delta", { text: content }) +
+              event("done", {
+                model: "test",
+                content,
+                ...(attachNews ? { news } : {}),
+              }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        },
+      }),
+      /real answer/,
+    );
+  }
+});

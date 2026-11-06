@@ -330,16 +330,22 @@ module.exports = (req, res) => {
   console.log(
     `Packaged ${fileList.size} runtime files (${warnings.size} optional dependency warnings); static output excludes private server data.`,
   );
-  if (process.env.AURUM_VERIFY_LIVE_NEWS === "1") {
+  if (
+    process.env.AURUM_VERIFY_LIVE_NEWS === "1" ||
+    process.env.AURUM_VERIFY_NEWS_ROUTING === "1"
+  ) {
     const {
       verifyLiveNews,
+      verifyNewsRouting,
       withPackagedNewsApi,
     } = require("./verify-live-news.cjs");
     await withPackagedNewsApi(handler, (origin) =>
-      verifyLiveNews({
-        origin,
-        includeChat: process.env.AURUM_VERIFY_NEWS_FEEDS_ONLY !== "1",
-      }),
+      process.env.AURUM_VERIFY_NEWS_ROUTING === "1"
+        ? verifyNewsRouting({ origin })
+        : verifyLiveNews({
+            origin,
+            includeChat: process.env.AURUM_VERIFY_NEWS_FEEDS_ONLY !== "1",
+          }),
     );
   }
   if (

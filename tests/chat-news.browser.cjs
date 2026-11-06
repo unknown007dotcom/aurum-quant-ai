@@ -241,11 +241,15 @@ const frame = (name, payload) =>
       "Opening/discussing the feed must not silently spend AI requests",
     );
     assert.match(await page.locator("#messageInput").inputValue(), /XAU\/USD/);
+    // A normal typed request must reach the API unchanged; the news-desk helper
+    // is not a required workaround for adding special market keywords.
+    await page.locator("#messageInput").fill("What is the latest news?");
     await page.locator("#sendButton").click();
     await page
       .locator(".message.assistant:not([data-streaming]) .news-evidence")
       .waitFor();
     assert.equal(posts[0].settings.newsContext, true);
+    assert.equal(posts[0].messages.at(-1).content, "What is the latest news?");
     assert.equal(posts[0].news, undefined);
     const saved = async () =>
       page.evaluate((key) => {

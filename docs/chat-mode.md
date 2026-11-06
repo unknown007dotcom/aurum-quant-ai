@@ -43,7 +43,11 @@ roughly every three minutes only while the page is visible; it does not call the
 **Discuss the news with Mira** fills the composer rather than auto-sending a prompt.
 
 The per-conversation **Gold & market news** switch controls polling and automatic
-news context for relevant questions. Answers carry an expandable, historical
+news context for relevant questions. General requests such as “What is the latest
+news?” and access questions work without special market keywords. Short follow-ups
+can continue the current news topic. Mira distinguishes disabled/failed lookups
+from the ability to read the app's curated feed; a partial snapshot is not a
+blanket lack of access. Answers carry an expandable, historical
 source snapshot, retained through Stop, reload, copy and export. Headlines are
 not full articles, current quotes or trading signals. See [news integration](chat-news.md)
 for source terms, unknown timezones, security, caching and live verification.
@@ -142,6 +146,7 @@ node server.js           # Manual/browser verification at /chat.html
 # Opt-in: genuine provider requests to the public deployment, not mocks:
 npm run verify:live-chat-stream -- --require-incremental
 npm run verify:live-news # Real public feeds + source-grounded Mira answer
+npm run verify:news-routing # Exact generic requests + recovery after an old denial
 # Select a different deployment with AURUM_VERIFY_ORIGIN=https://your-app.example
 ```
 
